@@ -1,0 +1,653 @@
+// Innovo Xpress TMS — consignment core.
+// Prisma 7: no `url` here; the connection lives in prisma.config.ts (CLI) and in a
+// driver adapter at runtime (src/config/prisma.ts).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+/// The operational lifecycle. Forward-only, linear.
+/// PICKED_UP and DELIVERED are reachable ONLY by uploading a proof of delivery —
+/// see src/constants/statusFlow.ts. Exception states (CANCELLED / FAILED) are a
+/// deliberate omission and can be appended later without a breaking change.
+enum ConsignmentStatus {
+  UNASSIGNED // logged, no driver yet
+  ASSIGNED // driver attached, run not started
+  EN_ROUTE_TO_PICKUP // driver moving to the sender
+  AT_PICKUP // driver arrived at the sender
+  PICKED_UP // pickup proof captured
+  EN_ROUTE_TO_DELIVERY // driver moving to the receiver
+  AT_DELIVERY // driver arrived at the receiver
+  DELIVERED // delivery proof captured — terminal
+}
+
+enum PodLeg {
+  PICKUP
+  DELIVERY
+}
+
+enum PackageType {
+  BOX
+  BOTTLE
+  ENVELOPE
+  PALLET
+  OTHER
+}
+
+enum Priority {
+  NORMAL
+  HIGH
+  LOW
+}
+
+enum TaskType {
+  DELIVERY
+  PICKUP
+}
+
+/// Ranked, low to high: driver < operator < admin (see middleware/rbac.ts).
+///
+/// `driver` used to be a token-only string because drivers had no accounts. Now
+/// that Supabase Auth issues every login, a driver is a real user like anyone
+/// else, and this enum is the single source of truth for what they may do.
+enum UserRole {
+  driver
+  operator
+  admin
+}
+
+// ---------------------------------------------------------------------------
+// Lookups
+// ---------------------------------------------------------------------------
+
+model Client {
+  id   String @id @default(cuid())
+  name String @unique
+  /// Short code that prefixes this client's order numbers, e.g. DRZ -> DRZ-20260813-0001.
+  code String @unique
+
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  consignments  Consignment[]
+  orderCounters OrderCounter[]
+
+  @@map("clients")
+}
+
+model Driver {
+  id     String  @id @default(cuid())
+  name   String
+  code   String? @unique
+  mobile String?
+  email  String?
+
+  /// Employment, set by an admin. False = they have left; they vanish from
+  /// assignment and cannot sign in, but every past delivery still shows their
+  /// name. This is what "removing" a driver almost always means.
+  active Boolean @default(true)
+
+  /// Availability, set by the driver from their phone. True = clocked in and
+  /// assignable right now. Reset to false nightly by a pg_cron job, because a
+  /// shift does not carry across days and a forgotten button must not leave
+  /// someone looking available all week.
+  /// The window of the *current* shift while `onShift`, and of the last one once
+  /// it closes — `shiftStartedAt` is deliberately NOT cleared on clock-off, since
+  /// a close time with no matching open time cannot tell you how long anyone
+  /// worked. `shiftEndedAt` is null exactly while a shift is open, and is stamped
+  /// once when it closes: by the driver, by an admin deactivating them, or by the
+  /// nightly job. Re-tapping a button never moves either timestamp.
+  ///
+  /// This is the latest shift only. Full history would need its own append-only
+  /// table; nothing asks for that yet.
+  onShift        Boolean   @default(false)
+  shiftStartedAt DateTime?
+  shiftEndedAt   DateTime?
+
+  /// Index into the dispatch map's colour palette, not a hex value — a hex in
+  /// the database could not be restyled for dark mode or colour-blind safety
+  /// without a data migration. Assigned least-used-first on create; deliberately
+  /// NOT unique, so exhausting the palette reuses a colour rather than failing
+  /// the 9th driver's creation.
+  mapColorIndex Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// At most one login per driver (User.driverId is unique).
+  user           User?
+  consignments   Consignment[]
+  trackingEvents TrackingEvent[]
+  proofs         ProofOfDelivery[]
+  /// Movement history, append-only.
+  locations      DriverLocation[]
+  /// Current position — at most one row, overwritten on every report.
+  position       DriverPosition?
+  /// Planned delivery runs. At most one ACTIVE at a time.
+  routes         Route[]
+
+  @@index([name])
+  @@index([active, onShift])
+  @@map("drivers")
+}
+
+/// A GPS ping from a driver's phone.
+///
+/// High-write, append-only: one row every few seconds per driver on shift. Kept
+/// for 7 days by a pg_cron job (see prisma/sql/constraints.sql) — long enough to
+/// replay a disputed delivery, short enough that the table stays small.
+///
+/// Coordinates are Float (double precision), which resolves to roughly a
+/// millimetre — far beyond what consumer GPS provides. PostGIS is installed on
+/// this project if proximity queries are ever needed, but plain columns are
+/// enough to draw a trail.
+model DriverLocation {
+  id       String @id @default(cuid())
+  driverId String
+  driver   Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  lat Float
+  lng Float
+
+  /// Metres of uncertainty reported by the device — lets the UI ignore bad fixes.
+  accuracyM  Float?
+  speedMps   Float?
+  headingDeg Float?
+
+  /// The job the driver was on when this was recorded, when known.
+  consignmentId String?
+  consignment   Consignment? @relation(fields: [consignmentId], references: [id], onDelete: SetNull)
+
+  recordedAt DateTime @default(now())
+
+  @@index([driverId, recordedAt])
+  @@index([recordedAt])
+  @@map("driver_locations")
+}
+
+/// Where a driver is RIGHT NOW. One row per driver, overwritten forever.
+///
+/// This exists because "where is this driver now?" and "where has this driver
+/// been?" are different questions with opposite write patterns, and answering
+/// both from `driver_locations` was the root of a whole family of bugs.
+///
+/// Answering "now" from an append-only history means:
+///   - a DISTINCT ON over a table that grows by millions of rows, and
+///   - liveness that depends on whether the driver MOVED, because a history table
+///     should only record movement. A courier parked at a warehouse stopped
+///     writing rows and silently vanished from the live map.
+///
+/// With a primary key on `driverId` the write is an in-place UPDATE, the table
+/// never grows, and "who is live" is a scan of eight rows. The phone can then
+/// report every few seconds regardless of movement, because volume costs nothing
+/// when you are overwriting. `driver_locations` goes back to recording only
+/// significant movement, which is what it was always right to do.
+model DriverPosition {
+  driverId String @id
+  driver   Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  lat Float
+  lng Float
+
+  accuracyM  Float?
+  speedMps   Float?
+  headingDeg Float?
+
+  /// The job the driver was on, when the phone knows. Deliberately NO foreign
+  /// key: the app holds its current job in localStorage, so after a reseed it
+  /// reports an id that no longer exists — and losing a live position over a
+  /// stale job reference is a far worse trade than losing the reference.
+  consignmentId String?
+
+  /// The device's own time for this fix. `updatedAt` is when WE heard about it;
+  /// liveness is judged on this one, so a phone flushing a buffered fix cannot
+  /// look more current than it is.
+  recordedAt DateTime
+  updatedAt  DateTime @updatedAt
+
+  @@index([recordedAt])
+  @@map("driver_positions")
+}
+
+/// A PROFILE, not a credential store.
+///
+/// Supabase Auth (the `auth` schema, owned by GoTrue) holds the email, the
+/// password hash and the sessions. This table holds what the application needs
+/// and Supabase has no opinion about: role, active flag, and which driver the
+/// person is.
+///
+/// `id` IS the `auth.users.id` uuid — the two are the same person. Written only
+/// through the users service, which creates the auth user first.
+model User {
+  id     String   @id
+  /// Mirrored from auth.users for listing and search; auth remains the owner.
+  email  String   @unique
+  name   String
+  role   UserRole @default(operator)
+  active Boolean  @default(true)
+
+  /// Set only on driver accounts — which roster row this login speaks for.
+  /// Unique, so two logins can never claim the same driver.
+  driverId String? @unique
+  driver   Driver? @relation(fields: [driverId], references: [id], onDelete: SetNull)
+
+  chatMemberships ChatMember[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([role])
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// The order
+// ---------------------------------------------------------------------------
+
+/// One consignment = one job. Sender/receiver are point-in-time SNAPSHOTS, not
+/// references to an address book: editing a client's address must never rewrite
+/// the history of an already-dispatched order.
+model Consignment {
+  id String @id @default(cuid())
+
+  /// System-assigned business id, e.g. DRZ-20260813-0001. Allocated atomically
+  /// from OrderCounter — never derived by reading the previous max.
+  orderNo String @unique
+
+  /// The client's own tracking number (a Daraz / TCS order id). Operator-supplied,
+  /// optional, and unique only WITHIN a client.
+  clientReference String?
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+
+  /// Restrict (not SetNull): the consignments_driver_status_agree CHECK constraint
+  /// requires driverId to be non-null for every non-UNASSIGNED order, so silently
+  /// nulling a driver would corrupt in-flight work.
+  driverId String?
+  driver   Driver? @relation(fields: [driverId], references: [id], onDelete: Restrict)
+
+  status   ConsignmentStatus @default(UNASSIGNED)
+  priority Priority          @default(NORMAL)
+  taskType TaskType          @default(DELIVERY)
+
+  // --- sender (pickup) snapshot ---
+  senderName         String
+  senderPhone        String?
+  senderEmail        String?
+  senderLine1        String
+  senderArea         String?
+  senderCity         String
+  senderPostcode     String?
+  senderInstructions String?
+
+  /// Captured when the operator picks an address suggestion, or drags the pin.
+  /// Nullable because the API is also driven by Postman and the seed, and an
+  /// address that will not geocode must still be loggable.
+  senderLat Float?
+  senderLng Float?
+
+  // --- receiver (drop) snapshot ---
+  receiverName     String
+  receiverPhone    String?
+  receiverEmail    String?
+  receiverLine1    String
+  receiverArea     String?
+  receiverCity     String
+  receiverPostcode String?
+  receiverNotes    String?
+
+  receiverLat Float?
+  receiverLng Float?
+
+  // --- scheduling ---
+  readyBy   DateTime?
+  deliverBy DateTime?
+
+  // --- lifecycle stamps, written by the transition that causes them ---
+  assignedAt  DateTime?
+  pickedUpAt  DateTime?
+  deliveredAt DateTime?
+
+  generalNote         String?
+  createdByUserId     String?
+  lastUpdatedByUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items          Item[]
+  proofs         ProofOfDelivery[]
+  trackingEvents TrackingEvent[]
+  locations      DriverLocation[]
+  /// Places this order holds on planned routes.
+  routeStops     RouteStop[]
+
+  @@unique([clientId, clientReference])
+  @@index([clientId, status])
+  @@index([driverId, status])
+  @@index([status])
+  @@index([createdAt])
+  /// The dispatch map bounds itself by delivery deadline, not creation date.
+  @@index([deliverBy])
+  @@map("consignments")
+}
+
+model Item {
+  id            String      @id @default(cuid())
+  consignmentId String
+  consignment   Consignment @relation(fields: [consignmentId], references: [id], onDelete: Cascade)
+
+  description String
+  qty         Int          @default(1)
+  weightKg    Decimal?     @db.Decimal(10, 3)
+  packageType PackageType?
+  barcode     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([consignmentId])
+  @@map("items")
+}
+
+// ---------------------------------------------------------------------------
+// Proof of delivery  (schema only in Feature 1 — endpoints land with Feature 3)
+// ---------------------------------------------------------------------------
+
+/// One row per leg. Files live in Supabase Storage under deterministic paths;
+/// only the object paths are stored here.
+model ProofOfDelivery {
+  id            String      @id @default(cuid())
+  consignmentId String
+  consignment   Consignment @relation(fields: [consignmentId], references: [id], onDelete: Cascade)
+
+  leg PodLeg
+
+  photoPath  String
+  photoMime  String
+  photoBytes Int
+
+  signaturePath  String
+  signatureMime  String
+  signatureBytes Int
+
+  capturedAt         DateTime @default(now())
+  capturedByDriverId String?
+  capturedByDriver   Driver?  @relation(fields: [capturedByDriverId], references: [id], onDelete: SetNull)
+  capturedByUserId   String?
+
+  /// Lets a retry of a lost response return the original row instead of a 409.
+  idempotencyKey String?
+  replacedAt     DateTime?
+
+  @@unique([consignmentId, leg])
+  @@index([consignmentId])
+  @@map("proofs_of_delivery")
+}
+
+// ---------------------------------------------------------------------------
+// Audit trail
+// ---------------------------------------------------------------------------
+
+/// fromStatus/toStatus (rather than a single status) so an assignment event is
+/// distinguishable from a real status move and the history is replayable.
+/// One timestamp only — the old date-typed eventDate silently truncated to midnight.
+model TrackingEvent {
+  id            String      @id @default(cuid())
+  consignmentId String
+  consignment   Consignment @relation(fields: [consignmentId], references: [id], onDelete: Cascade)
+
+  fromStatus ConsignmentStatus?
+  toStatus   ConsignmentStatus
+
+  driverId String?
+  driver   Driver? @relation(fields: [driverId], references: [id], onDelete: SetNull)
+
+  actorUserId String?
+  actorEmail  String?
+  note        String?
+
+  recordedAt DateTime @default(now())
+
+  @@index([consignmentId, recordedAt])
+  @@index([driverId])
+  @@map("tracking_events")
+}
+
+// ---------------------------------------------------------------------------
+// Order-number allocation
+// ---------------------------------------------------------------------------
+
+/// One row per (client, day). Incremented by a single atomic UPSERT so concurrent
+/// creates can never mint the same order number.
+model OrderCounter {
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  /// YYYYMMDD in server-local time.
+  dateKey String
+  lastSeq Int    @default(0)
+
+  @@id([clientId, dateKey])
+  @@map("order_counters")
+}
+
+// =====================================================================
+// Chat — direct messages and spaces. Companion SQL: prisma/sql/chat.sql
+// =====================================================================
+
+enum ChatConversationType {
+  DIRECT
+  SPACE
+}
+
+enum ChatMemberRole {
+  OWNER
+  MEMBER
+}
+
+enum ChatMessageType {
+  TEXT
+  SYSTEM
+}
+
+/// One chat thread: either a 1:1 DIRECT message or a named SPACE.
+model ChatConversation {
+  id   String               @id @default(cuid())
+  type ChatConversationType
+
+  /// SPACE only — a DIRECT conversation is labelled with the other person.
+  name        String?
+  description String?
+
+  /// DIRECT only: sorted(memberIds).join(':'), computed in JS so the ordering
+  /// can never be collation-dependent. Unique, and NULL for spaces — Postgres
+  /// treats NULLs as distinct, so unlimited spaces coexist while any pair of
+  /// people can only ever have one DM.
+  directKey String? @unique
+
+  createdById   String
+  lastMessageAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members  ChatMember[]
+  messages ChatMessage[]
+
+  @@index([lastMessageAt])
+  @@map("chat_conversations")
+}
+
+/// Who is in a conversation, and how far they have read.
+model ChatMember {
+  conversationId String
+  userId         String
+  role           ChatMemberRole @default(MEMBER)
+  joinedAt       DateTime       @default(now())
+
+  /// Drives the unread badge. NULL means "never opened".
+  lastReadAt DateTime?
+
+  conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, userId])
+  /// The composite primary key leads with conversationId, so "list my
+  /// conversations" cannot use it. This is the hottest query in the feature.
+  @@index([userId])
+  @@map("chat_members")
+}
+
+model ChatMessage {
+  id             String @id @default(cuid())
+  conversationId String
+
+  /// Deliberately a plain column, not a relation: chat history must survive
+  /// the sender's account being deleted, exactly as tracking_events keeps
+  /// actorUserId.
+  senderId String
+
+  type ChatMessageType @default(TEXT)
+  body String
+
+  /// One optional file per message. Stored in its own private bucket, never
+  /// the `pod` one. The storage path is server-only and never leaves the API —
+  /// clients receive a short-lived signed URL instead, minted on demand.
+  attachmentPath    String?
+  /// The original filename, kept for display and for Content-Disposition. It
+  /// is deliberately NOT part of the storage path, so a hostile name cannot
+  /// influence where the object lands.
+  attachmentName    String?
+  attachmentMime    String?
+  attachmentBytes   Int?
+  /// Set only when the magic bytes really said PNG/JPEG/WebP. Anything else is
+  /// download-only — an SVG is a genuine image and an executable script.
+  attachmentIsImage Boolean?
+
+  /// Client-generated uuid. Makes a retried send idempotent and lets the
+  /// client dedupe its optimistic bubble against the broadcast echo.
+  clientMessageId String?
+
+  /// No delete endpoint yet; the column and its `IS NULL` predicate ship now
+  /// because retrofitting the *filter* later means auditing every read path,
+  /// the broadcast trigger, the unread count and the cursor.
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, clientMessageId])
+  @@index([conversationId, createdAt, id])
+  @@map("chat_messages")
+}
+
+/// A planned delivery run: one driver, one collection point, an ordered list of
+/// drop-offs.
+///
+/// A route is a PLAN, deliberately separate from the work itself. It touches no
+/// existing table — nothing here gates a status, a proof or an assignment — so the
+/// lifecycle behaves exactly as it did before this existed. Delete both route
+/// tables and the system carries on unchanged.
+///
+/// Two things it stores and one it refuses to:
+///   - the SEQUENCE, because "visit this order seventh" is a decision and nothing
+///     else in the database records it;
+///   - a snapshot of each stop's coordinates, which is the only way to notice later
+///     that someone edited a delivery address the plan was built around;
+///   - never the LINE. Geometry is regenerated from OSRM on every read (~300ms for
+///     126 stops), so there is no cache to invalidate and the drawing can never
+///     disagree with the stops.
+model Route {
+  id String @id @default(cuid())
+
+  driverId String
+  driver   Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  /// Superseded rather than deleted: last week's plan is still worth being able
+  /// to look at. A partial unique index enforces one ACTIVE route per driver.
+  status  RouteStatus @default(ACTIVE)
+  /// Optimistic concurrency. Two dispatchers reordering one driver's route must
+  /// not silently overwrite each other — the second gets a 409.
+  version Int         @default(1)
+
+  /// Where the driver collects everything. Mandatory: a run has to start somewhere.
+  startLat   Float
+  startLng   Float
+  startLabel String?
+
+  /// Optional finish. Absent means "end wherever the last drop is".
+  endLat   Float?
+  endLng   Float?
+  endLabel String?
+
+  /// Whether the current order came from the optimiser or from a human dragging
+  /// stops. Re-optimising a hand-made order without being asked is how a driver
+  /// ends up doubling back and stops trusting the app.
+  sequenceSource SequenceSource @default(OPTIMISED)
+  optimisedAt    DateTime?
+
+  /// Totals as computed when the sequence was last saved. Recomputed on read.
+  plannedDistanceM Float?
+  plannedDurationS Float?
+
+  createdById String?
+  /// Idempotency: a double-tapped Save must not create two routes.
+  clientKey   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  stops RouteStop[]
+
+  @@unique([driverId, clientKey])
+  @@index([driverId, status])
+  @@map("routes")
+}
+
+/// One drop-off on a route — "order X is stop 7".
+model RouteStop {
+  id String @id @default(cuid())
+
+  routeId String
+  route   Route  @relation(fields: [routeId], references: [id], onDelete: Cascade)
+
+  consignmentId String
+  consignment   Consignment @relation(fields: [consignmentId], references: [id], onDelete: Cascade)
+
+  /// 1-based position. Uniqueness per route is DEFERRABLE (declared in raw SQL,
+  /// not here) so a reorder can shuffle every row inside one transaction without
+  /// temporary or negative values.
+  seq Int
+
+  /// The delivery coordinates AS THEY WERE when the plan was saved. Comparing
+  /// these against the consignment's current values is what detects that an
+  /// address moved under a plan already in progress.
+  plannedLat Float
+  plannedLng Float
+
+  @@unique([routeId, consignmentId])
+  @@index([consignmentId])
+  @@map("route_stops")
+}
+
+enum RouteStatus {
+  ACTIVE
+  SUPERSEDED
+}
+
+enum SequenceSource {
+  OPTIMISED
+  MANUAL
+}

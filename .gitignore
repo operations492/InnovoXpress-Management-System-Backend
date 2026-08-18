@@ -1,0 +1,71 @@
+# ---------------------------------------------------------------------------
+# Secrets — the most important lines in this file
+# ---------------------------------------------------------------------------
+# .env holds the Supabase database password AND the service-role key, which
+# bypasses every security rule on the project. Committing it once means rotating
+# both, because git history keeps it forever.
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------------------
+# Dependencies and build output
+# ---------------------------------------------------------------------------
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Prisma generates the client into node_modules by default. If a custom
+# `output` is ever set in schema.prisma, add that path here too.
+prisma/generated/
+
+# ---------------------------------------------------------------------------
+# Logs and local runtime noise
+# ---------------------------------------------------------------------------
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+logs/
+
+# ---------------------------------------------------------------------------
+# Test and coverage artefacts
+# ---------------------------------------------------------------------------
+coverage/
+.nyc_output/
+*.lcov
+
+# ---------------------------------------------------------------------------
+# Editor and OS
+# ---------------------------------------------------------------------------
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------------------------------------------------------------------------
+# Scratch files
+# ---------------------------------------------------------------------------
+# Ad-hoc connection checks, scratch scripts, sample POD images used while
+# testing uploads by hand.
+conncheck.mjs
+*.local.*
+tmp/
+scratch/
+*.png
+*.jpg
+*.jpeg
+*.webp
+
+# ---------------------------------------------------------------------------
+# NOT ignored, on purpose
+# ---------------------------------------------------------------------------
+# prisma/migrations/  — migration history is source of truth, always commit it
+# prisma/sql/         — CHECK constraints, RLS lockdown and the retention job
+# .env.example        — the template, with placeholder values only
