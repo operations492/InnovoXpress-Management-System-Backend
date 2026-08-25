@@ -25,12 +25,19 @@ import {
 const router = Router();
 
 /*
- * Chat is staff-only. `requireMinRole('operator')` means a driver token fails
- * every route here by construction, which is the first of two gates — the
- * broadcast fan-out in prisma/sql/chat.sql applies the same exclusion so a
- * demoted operator stops receiving messages too.
+ * Chat reaches drivers now, so the router-level gate drops to `driver` and the
+ * staff-only rules move to the two routes that actually need them.
+ *
+ * What holds this together is that **every `/:id` route below is guarded by
+ * `requireConversationMember`, which tests membership rather than role.** A
+ * driver therefore reaches exactly the threads they were put in, and no more —
+ * the same guard that already stopped an operator reading a DM they were not
+ * part of. Opening the router did not weaken it.
+ *
+ * Two things stay staff-only, immediately below: creating a space, and adding
+ * members to one.
  */
-router.use(authenticate, requireMinRole('operator'));
+router.use(authenticate, requireMinRole('driver'));
 
 router.get(
   '/directory',
@@ -46,8 +53,17 @@ router.post(
   validate(createDirectSchema),
   asyncHandler(controller.openDirect),
 );
+/*
+ * Spaces are staff-only, both to create and to join.
+ *
+ * A driver dropped into a staff space reads everything said in it from the
+ * moment they join — including the operators' conversation about them.
+ * Dispatch↔driver is a DM relationship, and `assertEligible` enforces the same
+ * rule a second time in the service.
+ */
 router.post(
   '/conversations/spaces',
+  requireMinRole('operator'),
   validate(createSpaceSchema),
   asyncHandler(controller.createSpace),
 );
@@ -116,6 +132,7 @@ router.get(
 
 router.post(
   '/conversations/:id/members',
+  requireMinRole('operator'),
   validate(conversationIdParamSchema, 'params'),
   validate(addMembersSchema),
   requireConversationMember,

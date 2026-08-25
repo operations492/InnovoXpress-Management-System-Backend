@@ -132,11 +132,21 @@ export function markRead(conversationId: string, userId: string, at: Date) {
 /* participants                                                        */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Everyone an operator may start a conversation with — **drivers included**.
+ *
+ * Drivers are addressable but not callers: the router still gates every chat
+ * endpoint at `requireMinRole('operator')`, so a driver token cannot reach any
+ * of this. Widening the directory only means dispatch can message them.
+ *
+ * `role` rides along in `participantSelect`, so the console can label a driver
+ * in the picker and keep them out of the add-to-space list, where the service
+ * would reject them anyway.
+ */
 export function listDirectory(params: { excludeUserId: string; q?: string }) {
   return prisma.user.findMany({
     where: {
       active: true,
-      role: { in: ['operator', 'admin'] },
       id: { not: params.excludeUserId },
       ...(params.q
         ? {
@@ -152,12 +162,28 @@ export function listDirectory(params: { excludeUserId: string; q?: string }) {
   });
 }
 
-/// Who is allowed to be in a conversation at all. Drivers and deactivated
-/// accounts simply do not come back, and the service reports one uniform
-/// error for every reason — so an id cannot be probed for its role.
-export function findEligibleParticipants(userIds: string[]) {
+/**
+ * Who may be put in a conversation.
+ *
+ * `allowDrivers` is the whole driver-messaging rule in one parameter, and it is
+ * a parameter rather than a blanket widening on purpose:
+ *
+ * - **A direct message may include a driver** — that is dispatch talking to
+ *   their courier, which is the point.
+ * - **A space may not.** A driver dropped into a staff space would read
+ *   everything said in it from the moment they joined, including the operator
+ *   conversation about them. Dispatch↔driver is a DM relationship.
+ *
+ * Deactivated accounts never come back either way, and the service reports one
+ * uniform error for every reason — so an id cannot be probed for its role.
+ */
+export function findEligibleParticipants(userIds: string[], allowDrivers = false) {
   return prisma.user.findMany({
-    where: { id: { in: userIds }, active: true, role: { in: ['operator', 'admin'] } },
+    where: {
+      id: { in: userIds },
+      active: true,
+      role: allowDrivers ? { in: ['driver', 'operator', 'admin'] } : { in: ['operator', 'admin'] },
+    },
     select: participantSelect,
   });
 }

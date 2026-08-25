@@ -12,6 +12,18 @@ function viewerId(req: Request): string {
   return user.id;
 }
 
+/**
+ * The caller's role, for the two places chat cares about it.
+ *
+ * Read from `req.user` — our profile row — never from the token's own `role`
+ * claim, which is always `authenticated` and is the Postgres role for RLS.
+ */
+function viewerRole(req: Request): string {
+  const user = req.user;
+  if (!user) throw AppError.unauthorized();
+  return user.role;
+}
+
 /// The guard already loaded and authorized this; re-reading it from the
 /// request avoids a second query per call.
 function conversation(req: Request) {
@@ -26,7 +38,7 @@ function conversation(req: Request) {
 
 export async function directory(req: Request, res: Response) {
   const query = getValidatedQuery<DirectoryQuery>(req);
-  res.status(200).json(await service.listDirectory(viewerId(req), query));
+  res.status(200).json(await service.listDirectory(viewerId(req), viewerRole(req), query));
 }
 
 /* ------------------------------------------------------------------ */
@@ -38,7 +50,11 @@ export async function listConversations(req: Request, res: Response) {
 }
 
 export async function openDirect(req: Request, res: Response) {
-  const { conversation: row, created } = await service.openDirect(viewerId(req), req.body);
+  const { conversation: row, created } = await service.openDirect(
+    viewerId(req),
+    viewerRole(req),
+    req.body,
+  );
   // 201 when we minted it, 200 when it already existed — the endpoint is
   // idempotent, so "message this person" is safe to press twice.
   res.status(created ? 201 : 200).json(row);

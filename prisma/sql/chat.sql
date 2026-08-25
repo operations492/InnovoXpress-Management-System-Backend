@@ -153,8 +153,12 @@ BEGIN
   FROM public.chat_members m
   JOIN public.users u ON u.id = m."userId"
   WHERE m."conversationId" = NEW."conversationId"
-    AND u.active
-    AND u.role <> 'driver';
+    AND u.active;
+  -- No role filter. Drivers are members of dispatch DMs now, and excluding them
+  -- here would deliver the message to everyone EXCEPT the person it was written
+  -- for — silently, since realtime.send swallows its own failures. Membership is
+  -- the only thing that decides who hears about a message; the API enforces who
+  -- may become a member.
   RETURN NULL;
 END;
 $fn$;

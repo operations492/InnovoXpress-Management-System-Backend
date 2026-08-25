@@ -19,6 +19,11 @@ import type {
  * One rule is worth stating up front: whenever a participant is rejected,
  * the reason is never disclosed. "No such user", "deactivated" and "that is
  * a driver" all return the same 404, so an id cannot be probed for its role.
+ *
+ * The driver rule in one line: **dispatch opens conversations, drivers reply to
+ * them.** A driver can read, send, attach and mark read in any thread they are a
+ * member of, and can do nothing else — no directory, no starting a thread, no
+ * spaces.
  */
 
 const UNKNOWN_PARTICIPANT = 'User not found';
@@ -141,16 +146,32 @@ function decodeCursor(raw: string): { createdAt: Date; id: string } {
 /* participants                                                        */
 /* ------------------------------------------------------------------ */
 
-export async function listDirectory(viewerId: string, query: DirectoryQuery) {
+/**
+ * Who the caller may start a conversation with.
+ *
+ * **A driver gets an empty list.** They cannot open a conversation with anyone,
+ * so there is nobody to show — see `openDirect` for why. Returning nothing is
+ * better than returning a roster they would be refused on, which would read as a
+ * bug rather than a rule.
+ */
+export async function listDirectory(viewerId: string, viewerRole: string, query: DirectoryQuery) {
+  if (viewerRole === 'driver') return { data: [] };
+
   const rows = await repo.listDirectory({ excludeUserId: viewerId, q: query.q });
   return { data: rows.map(toParticipantDto) };
 }
 
-/// Throws the uniform error unless every requested id is a real, active,
-/// non-driver account.
-async function assertEligible(userIds: string[]): Promise<void> {
+/**
+ * Throws the uniform error unless every requested id is a real, active account
+ * that is allowed in this KIND of conversation.
+ *
+ * `allowDrivers` is passed true only from `openDirect`. Spaces and
+ * `addMembers` leave it false, so a driver cannot be dropped into a staff
+ * conversation and start reading it from the moment they join.
+ */
+async function assertEligible(userIds: string[], allowDrivers = false): Promise<void> {
   if (userIds.length === 0) return;
-  const eligible = await repo.findEligibleParticipants(userIds);
+  const eligible = await repo.findEligibleParticipants(userIds, allowDrivers);
   if (eligible.length !== userIds.length) throw AppError.notFound(UNKNOWN_PARTICIPANT);
 }
 
@@ -204,11 +225,34 @@ export async function listConversations(viewerId: string) {
   return { data, meta: { totalUnread } };
 }
 
-export async function openDirect(viewerId: string, input: CreateDirectInput) {
+export async function openDirect(
+  viewerId: string,
+  viewerRole: string,
+  input: CreateDirectInput,
+) {
   if (input.userId === viewerId) {
     throw AppError.badRequest('You cannot start a direct message with yourself');
   }
-  await assertEligible([input.userId]);
+  /*
+   * **Dispatch opens conversations. Drivers reply to them.**
+   *
+   * A driver cannot start a thread with anyone at all — not another driver, not
+   * an operator. They can only speak in threads dispatch created, which makes
+   * every driver conversation something the company deliberately opened rather
+   * than something that appeared.
+   *
+   * This is a server rule, not a missing screen. Omitting the button from the
+   * driver app would leave the endpoint reachable by anyone holding that token,
+   * and a client that politely declines to ask is not authorization — the same
+   * reason the console hides the Users tab AND the backend enforces it.
+   *
+   * `assertEligible` still runs for the staff path, so an operator cannot smuggle
+   * a driver into a space by way of a DM id.
+   */
+  if (viewerRole === 'driver') {
+    throw AppError.forbidden('Drivers cannot start conversations — dispatch opens them');
+  }
+  await assertEligible([input.userId], true);
 
   // Sorted in JS, never in SQL: a database sort would be collation-dependent
   // and could produce two different keys for one pair across environments.
