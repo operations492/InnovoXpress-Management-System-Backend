@@ -32,13 +32,13 @@ export const summarySelect = {
   senderName: true,
   senderLine1: true,
   senderCity: true,
-  senderArea: true,
+  senderProvince: true,
   senderLat: true,
   senderLng: true,
   receiverName: true,
   receiverLine1: true,
   receiverCity: true,
-  receiverArea: true,
+  receiverProvince: true,
   receiverLat: true,
   receiverLng: true,
   readyBy: true,
@@ -110,7 +110,7 @@ export function buildWhere(q: ListConsignmentsQuery): Prisma.ConsignmentWhereInp
       { receiverName: like },
       { senderCity: like },
       { receiverCity: like },
-      { receiverArea: like },
+      { receiverProvince: like },
     ];
   }
 

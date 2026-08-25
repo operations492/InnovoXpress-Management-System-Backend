@@ -122,7 +122,7 @@ function toPinDto(row: repo.PinRow, totalQty: number) {
     // The click-widget, riding along.
     receiverName: row.receiverName,
     receiverLine1: row.receiverLine1,
-    receiverArea: row.receiverArea,
+    receiverProvince: row.receiverProvince,
     receiverCity: row.receiverCity,
     totalQty,
     readyBy: row.readyBy,

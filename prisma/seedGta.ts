@@ -1,49 +1,84 @@
 /**
- * Additive load data: 200 unassigned deliveries around NUST, Islamabad.
+ * Additive load data: 200 unassigned deliveries around Mississauga, ON.
  *
  * NOT part of `npm run seed`, and deliberately not destructive — it inserts and
- * touches nothing that already exists. Every row it creates carries the `NST-`
+ * touches nothing that already exists. Every row it creates carries the `GTA-`
  * order-number prefix so the whole batch can be found and removed again:
  *
- *     npx tsx prisma/seedNust.ts          # insert 200
- *     npx tsx prisma/seedNust.ts --clean  # remove them
+ *     npx tsx prisma/seedGta.ts          # insert 200
+ *     npx tsx prisma/seedGta.ts --clean  # remove them
  *
  * The prefix also keeps it clear of `order_counters`: the real allocator numbers
  * orders by client code (DRZ / APX / TCS), so a separate prefix cannot collide with
  * a number the API will hand out later.
  *
  * ⚠️ `npm run seed` still truncates everything, including these.
+ *
+ * (This was `seedNust.ts`, 200 drops around NUST Islamabad, before the move to
+ * Canadian addressing. Same generator, same determinism — new geography.)
  */
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../src/config/prisma.js';
 
-/** NUST H-12. Verified against the local OSRM extract, which covers Islamabad. */
-const CENTRE = { lat: 33.6425, lng: 72.9905 };
+/**
+ * Airport Corporate Centre, Mississauga — the L4W the postal-code work is
+ * modelled on. Whatever OSRM extract is loaded must cover the GTA or these
+ * orders will list but not route.
+ */
+const CENTRE = { lat: 43.628, lng: -79.626 };
 
-/** How far out the drops are scattered. ~5km keeps them in one deliverable sector. */
-const RADIUS_KM = 5;
+/** How far out the drops are scattered around each zone's own centre. */
+const RADIUS_KM = 2.5;
 
 const COUNT = 200;
-const PREFIX = 'NST';
+const PREFIX = 'GTA';
 
 /**
- * Sectors around NUST, so addresses read like real Islamabad ones instead of
- * "Delivery 47". Offsets are roughly where each sector actually sits.
+ * Zones around the depot, each pinned to its **real FSA** — the first three
+ * characters of the postal code, which is the unit Canada Post actually sorts
+ * by and therefore the one a delivery zone is drawn around. Offsets are roughly
+ * where each FSA sits relative to the depot.
+ *
+ * This replaces the free-text neighbourhood the Islamabad version used: province
+ * is now a fixed 'ON' for every row, so the FSA is the only field left carrying
+ * "which part of town".
  */
-const SECTORS = [
-  { name: 'H-12', dLat: 0.0, dLng: 0.0 },
-  { name: 'G-13', dLat: -0.012, dLng: 0.02 },
-  { name: 'G-12', dLat: -0.014, dLng: 0.038 },
-  { name: 'H-11', dLat: 0.004, dLng: 0.042 },
-  { name: 'G-11', dLat: -0.016, dLng: 0.055 },
-  { name: 'H-13', dLat: 0.012, dLng: -0.018 },
-  { name: 'Golra Mor', dLat: 0.022, dLng: -0.006 },
-  { name: 'E-11', dLat: 0.028, dLng: 0.03 },
+const ZONES = [
+  { fsa: 'L4W', dLat: 0.0, dLng: 0.0 },
+  { fsa: 'L4V', dLat: 0.03, dLng: -0.01 },
+  { fsa: 'L4T', dLat: 0.045, dLng: -0.02 },
+  { fsa: 'L4Z', dLat: -0.012, dLng: -0.01 },
+  { fsa: 'L5R', dLat: -0.018, dLng: -0.032 },
+  { fsa: 'L5B', dLat: -0.035, dLng: -0.016 },
+  { fsa: 'L5M', dLat: -0.052, dLng: -0.075 },
+  { fsa: 'L5N', dLat: -0.039, dLng: -0.092 },
 ];
 
-const FIRST = ['Ayesha', 'Bilal', 'Hina', 'Usman', 'Sana', 'Tariq', 'Maryam', 'Kamran', 'Nadia', 'Fahad', 'Zara', 'Imran'];
-const LAST = ['Khan', 'Malik', 'Butt', 'Cheema', 'Qureshi', 'Abbasi', 'Rana', 'Shah', 'Awan', 'Gill'];
-const GOODS = ['Wireless earbuds', 'Cotton kurta', 'Kitchen blender', 'Novel paperback', 'Phone case', 'Desk lamp', 'Running shoes', 'Water bottle'];
+const STREETS = [
+  'Explorer Drive',
+  'Matheson Boulevard East',
+  'Eglinton Avenue West',
+  'Britannia Road East',
+  'Derry Road East',
+  'Dixie Road',
+  'Tomken Road',
+  'Hurontario Street',
+  'Burnhamthorpe Road West',
+  'Rathburn Road East',
+  'Central Parkway West',
+  'Mavis Road',
+];
+
+const FIRST = ['Emily', 'Liam', 'Priya', 'Noah', 'Fatima', 'Ethan', 'Chloe', 'Omar', 'Sofia', 'Jacob', 'Aisha', 'Lucas'];
+const LAST = ['Tremblay', 'Nguyen', 'Patel', 'MacDonald', 'Singh', 'Roy', 'Chen', 'Gagnon', 'Brown', 'Okafor'];
+const GOODS = ['Wireless earbuds', 'Winter gloves', 'Kitchen blender', 'Novel paperback', 'Phone case', 'Desk lamp', 'Running shoes', 'Water bottle'];
+
+/**
+ * The 20 letters Canada Post uses. D, F, I, O, Q and U are absent everywhere —
+ * they misread as digits or as each other on a sorting machine — so generating
+ * from the full alphabet would produce codes the CHECK constraint rejects.
+ */
+const LDU_LETTERS = 'ABCEGHJKLMNPRSTVWXYZ';
 
 /**
  * Deterministic pseudo-random, seeded by index.
@@ -64,6 +99,14 @@ function scatter(i: number, base: { lat: number; lng: number }) {
   const dLat = (dist / 111) * Math.cos(angle);
   const dLng = (dist / (111 * Math.cos((base.lat * Math.PI) / 180))) * Math.sin(angle);
   return { lat: +(base.lat + dLat).toFixed(6), lng: +(base.lng + dLng).toFixed(6) };
+}
+
+/** `L4W 5H8` — canonical shape, so it survives both Zod and the CHECK. */
+function postal(fsa: string, i: number): string {
+  const d1 = Math.floor(rand(i, 6) * 10);
+  const l = LDU_LETTERS[Math.floor(rand(i, 7) * LDU_LETTERS.length)];
+  const d2 = Math.floor(rand(i, 8) * 10);
+  return `${fsa} ${d1}${l}${d2}`;
 }
 
 async function clean() {
@@ -100,15 +143,15 @@ async function main() {
   const rows: Prisma.ConsignmentCreateManyInput[] = [];
 
   for (let i = 0; i < COUNT; i += 1) {
-    const sector = SECTORS[i % SECTORS.length];
+    const zone = ZONES[i % ZONES.length];
     const drop = scatter(i, {
-      lat: CENTRE.lat + sector.dLat,
-      lng: CENTRE.lng + sector.dLng,
+      lat: CENTRE.lat + zone.dLat,
+      lng: CENTRE.lng + zone.dLng,
     });
 
     const name = `${FIRST[i % FIRST.length]} ${LAST[(i * 3) % LAST.length]}`;
     const house = 100 + Math.floor(rand(i, 3) * 800);
-    const street = 1 + Math.floor(rand(i, 4) * 60);
+    const street = STREETS[Math.floor(rand(i, 4) * STREETS.length)];
 
     rows.push({
       orderNo: `${PREFIX}-${stamp}-${String(i + 1).padStart(4, '0')}`,
@@ -119,21 +162,21 @@ async function main() {
       taskType: 'DELIVERY',
 
       // One collection point for the whole batch — the depot a route starts from.
-      senderName: 'NUST Fulfilment Centre',
-      senderPhone: '+92 51 9085 0000',
-      senderLine1: 'Gate 3, NUST H-12 Campus',
-      senderArea: 'H-12',
-      senderCity: 'Islamabad',
-      senderPostcode: '44000',
+      senderName: 'Innovo Xpress Mississauga Depot',
+      senderPhone: '+1 905 555 0000',
+      senderLine1: '5985 Explorer Drive, Dock 1',
+      senderCity: 'Mississauga',
+      senderProvince: 'ON',
+      senderPostcode: 'L4W 5K6',
       senderLat: CENTRE.lat,
       senderLng: CENTRE.lng,
 
       receiverName: name,
-      receiverPhone: `+92 3${String(10 + (i % 90))} ${String(1000000 + i * 7919).slice(0, 7)}`,
-      receiverLine1: `House ${house}, Street ${street}`,
-      receiverArea: sector.name,
-      receiverCity: 'Islamabad',
-      receiverPostcode: '44000',
+      receiverPhone: `+1 ${['416', '647', '905', '289', '437'][i % 5]} 555 ${String(1000 + ((i * 79) % 9000))}`,
+      receiverLine1: `${house} ${street}`,
+      receiverCity: 'Mississauga',
+      receiverProvince: 'ON',
+      receiverPostcode: postal(zone.fsa, i),
       // The coordinate a route is planned against. Without it the order is listed
       // but cannot be routed, which the create endpoint refuses by name.
       receiverLat: drop.lat,
@@ -168,9 +211,9 @@ async function main() {
     }),
   });
 
-  console.log(`✓ ${created.length} unassigned orders around NUST, Islamabad (client: ${client.name})`);
-  console.log(`  centre ${CENTRE.lat}, ${CENTRE.lng} · scattered within ${RADIUS_KM} km`);
-  console.log(`  remove with:  npx tsx prisma/seedNust.ts --clean`);
+  console.log(`✓ ${created.length} unassigned orders around Mississauga, ON (client: ${client.name})`);
+  console.log(`  centre ${CENTRE.lat}, ${CENTRE.lng} · ${ZONES.length} FSAs · scattered within ${RADIUS_KM} km`);
+  console.log(`  remove with:  npx tsx prisma/seedGta.ts --clean`);
 }
 
 try {

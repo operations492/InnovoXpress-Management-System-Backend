@@ -18,7 +18,7 @@ const stopSelect = {
       priority: true,
       receiverName: true,
       receiverLine1: true,
-      receiverArea: true,
+      receiverProvince: true,
       receiverCity: true,
       receiverLat: true,
       receiverLng: true,

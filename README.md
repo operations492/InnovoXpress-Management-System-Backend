@@ -408,7 +408,7 @@ first UPDATE against a row that has not moved yet.
 inside the `sender` and `receiver` objects on create and update, and returned in the same place.
 
 They exist so the dispatcher map can pin pickup and delivery. **There is no geocoding on the server** —
-the console captures them when the operator picks an address suggestion (Photon/OpenStreetMap, called
+the console captures them when the operator picks an address suggestion (TomTom Search, called
 from the browser) or drags a map pin. That keeps a rate-limited third-party call out of the request
 path and off the critical path of creating an order.
 
@@ -567,7 +567,7 @@ src/
 prisma/
   schema.prisma              the tables
   seed.ts                    DESTRUCTIVE rebuild: admin, 3 clients, 8 drivers (6 on shift), 9 orders
-  seedNust.ts                ADDITIVE: 200 unassigned NST- orders around NUST; --clean removes them
+  seedGta.ts                 ADDITIVE: 200 unassigned GTA- orders around Mississauga; --clean removes them
   sql/constraints.sql        CHECK constraints, RLS lockdown, pg_cron retention + shift-reset jobs
   sql/chat.sql               chat CHECKs, the inbox RLS policy, fan-out triggers
   sql/map.sql                is_ops_user(), the dispatch:tasks policy and task/item triggers
@@ -1072,8 +1072,8 @@ Returns **200** — note these are **slim rows: no items, no timeline**:
     "client": { "id": "cm...", "name": "Daraz", "code": "DRZ" },
     "driver": null, "status": "UNASSIGNED", "statusLabel": "Unassigned",
     "priority": "NORMAL", "taskType": "DELIVERY",
-    "senderName": "...", "senderLine1": "...", "senderCity": "Lahore", "senderArea": "...",
-    "receiverName": "...", "receiverLine1": "...", "receiverCity": "Lahore", "receiverArea": "...",
+    "senderName": "...", "senderLine1": "...", "senderCity": "Lahore", "senderProvince": "...",
+    "receiverName": "...", "receiverLine1": "...", "receiverCity": "Lahore", "receiverProvince": "...",
     "readyBy": null, "deliverBy": null, "generalNote": "...",
     "createdAt": "2026-08-15T...",
     "itemCount": 1, "totalQty": 1, "totalWeightKg": 0.48

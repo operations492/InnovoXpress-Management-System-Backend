@@ -10,7 +10,7 @@ export interface PickupRow {
   senderLat: number | null;
   senderLng: number | null;
   senderLine1: string;
-  senderArea: string | null;
+  senderProvince: string | null;
   senderCity: string;
 }
 
@@ -34,7 +34,7 @@ export function findPickup(consignmentId: string) {
       senderLat: true,
       senderLng: true,
       senderLine1: true,
-      senderArea: true,
+      senderProvince: true,
       senderCity: true,
     },
   });

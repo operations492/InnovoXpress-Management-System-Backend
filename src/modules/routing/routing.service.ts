@@ -87,7 +87,7 @@ export async function driverRoute(consignmentId: string, q: DriverRouteQuery) {
       lat: pickup.lat,
       lng: pickup.lng,
       line1: order.senderLine1,
-      area: order.senderArea,
+      province: order.senderProvince,
       city: order.senderCity,
     },
     orderNo: order.orderNo,
@@ -271,7 +271,7 @@ export async function nearestDrivers(consignmentId: string, q: NearestDriversQue
         lat: pickup.lat,
         lng: pickup.lng,
         line1: order.senderLine1,
-        area: order.senderArea,
+        province: order.senderProvince,
         city: order.senderCity,
       },
       /** What `durationS`/`distanceM` actually mean — the UI must not guess. */

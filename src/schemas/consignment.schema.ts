@@ -11,6 +11,16 @@ import { PackageType, Priority, TaskType } from '@prisma/client';
 const trimmed = (max: number) => z.string().trim().max(max);
 
 /**
+ * Address text is deliberately unvalidated beyond a length bound.
+ *
+ * City, province and postal code are filled by the console's address picker from
+ * the geocoder, and an operator who edits them afterwards is taken at their word
+ * — they are standing in front of the customer and the geocoder is not. There is
+ * no province enum and no Canada Post pattern here, and no CHECK behind it
+ * either; the coordinate is the field the system actually routes on.
+ */
+
+/**
  * Coordinates captured when the operator picks an address suggestion or drags
  * the map pin. Optional here even though the console insists on them, because
  * Postman and the seed also write through this schema.
@@ -24,8 +34,8 @@ const senderSchema = z
     phone: trimmed(40).optional(),
     email: z.email().max(160).optional(),
     line1: trimmed(200).min(1, 'Sender address is required'),
-    area: trimmed(120).optional(),
     city: trimmed(80).min(1, 'Sender city is required'),
+    province: trimmed(80).optional(),
     postcode: trimmed(20).optional(),
     instructions: trimmed(500).optional(),
     lat,
@@ -39,8 +49,8 @@ const receiverSchema = z
     phone: trimmed(40).optional(),
     email: z.email().max(160).optional(),
     line1: trimmed(200).min(1, 'Receiver address is required'),
-    area: trimmed(120).optional(),
     city: trimmed(80).min(1, 'Receiver city is required'),
+    province: trimmed(80).optional(),
     postcode: trimmed(20).optional(),
     notes: trimmed(500).optional(),
     lat,

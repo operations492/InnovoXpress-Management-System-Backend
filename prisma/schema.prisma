@@ -285,8 +285,13 @@ model Consignment {
   senderPhone        String?
   senderEmail        String?
   senderLine1        String
-  senderArea         String?
+  /// Two-letter province/territory code ("ON", "BC"). A closed set of 13, so the
+  /// console offers a Select — free text gave "ON", "Ont" and "Ontario" in three
+  /// rows of the same city.
+  senderProvince     String?
   senderCity         String
+  /// Canada Post format, stored canonically as "A1A 1A1" (upper, single space),
+  /// so LEFT(postcode, 3) is always a clean FSA for zoning.
   senderPostcode     String?
   senderInstructions String?
 
@@ -301,7 +306,7 @@ model Consignment {
   receiverPhone    String?
   receiverEmail    String?
   receiverLine1    String
-  receiverArea     String?
+  receiverProvince String?
   receiverCity     String
   receiverPostcode String?
   receiverNotes    String?

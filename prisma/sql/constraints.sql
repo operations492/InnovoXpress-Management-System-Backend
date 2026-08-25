@@ -27,6 +27,11 @@ ALTER TABLE consignments DROP CONSTRAINT IF EXISTS consignments_window_ordered;
 ALTER TABLE consignments ADD CONSTRAINT consignments_window_ordered
   CHECK ("readyBy" IS NULL OR "deliverBy" IS NULL OR "deliverBy" >= "readyBy");
 
+-- Address text (city / province / postal code) is deliberately unconstrained.
+-- The console fills it from the geocoder and lets the operator overrule it; the
+-- coordinate is what the system routes on, so a CHECK here would only block a
+-- dispatcher who knows better than TomTom does.
+
 -- ---------------------------------------------------------------------------
 -- Lock the public schema down (Supabase)
 -- ---------------------------------------------------------------------------

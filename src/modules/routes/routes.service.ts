@@ -85,7 +85,7 @@ async function present(route: repo.RouteRow) {
       priority: c.priority,
       receiverName: c.receiverName,
       receiverLine1: c.receiverLine1,
-      receiverArea: c.receiverArea,
+      receiverProvince: c.receiverProvince,
       receiverCity: c.receiverCity,
       readyBy: c.readyBy,
       deliverBy: c.deliverBy,

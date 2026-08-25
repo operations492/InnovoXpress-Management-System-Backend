@@ -31,7 +31,7 @@ const pinSelect = {
   receiverLng: true,
   receiverName: true,
   receiverLine1: true,
-  receiverArea: true,
+  receiverProvince: true,
   receiverCity: true,
   readyBy: true,
   deliverBy: true,
