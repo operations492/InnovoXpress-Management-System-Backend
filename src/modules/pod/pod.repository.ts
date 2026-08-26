@@ -40,6 +40,8 @@ export interface CaptureInput {
   driverId: string;
   actorId: string;
   actorEmail: string;
+  /** The person who signed for the handover. See the schema comment. */
+  signedByName?: string;
   note: string;
   idempotencyKey?: string;
 }
@@ -81,6 +83,7 @@ export function captureProofTx(input: CaptureInput) {
           signaturePath: input.signature.path,
           signatureMime: input.signature.mime,
           signatureBytes: input.signature.bytes,
+          signedByName: input.signedByName ?? null,
           capturedByDriverId: input.driverId,
           capturedByUserId: input.actorId,
           idempotencyKey: input.idempotencyKey ?? null,
