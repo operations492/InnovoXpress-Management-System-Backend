@@ -386,6 +386,11 @@ model ProofOfDelivery {
   signatureMime  String
   signatureBytes Int
 
+  /// Who handed the parcel over (PICKUP) or took it in (DELIVERY) — the person
+  /// who signed. Nullable because every proof captured before this column
+  /// existed has no answer, and inventing one would be worse than none.
+  signedByName String?
+
   capturedAt         DateTime @default(now())
   capturedByDriverId String?
   capturedByDriver   Driver?  @relation(fields: [capturedByDriverId], references: [id], onDelete: SetNull)

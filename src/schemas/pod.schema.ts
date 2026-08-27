@@ -18,6 +18,10 @@ export const podLegParamSchema = z
 export const podBodySchema = z
   .object({
     capturedByDriverId: z.string().min(1).optional(),
+    /// The person who signed. Trimmed and bounded like every other free text
+    /// here; optional on the wire so an older client keeps working, and so a
+    /// handover genuinely nobody named is still recordable.
+    signedByName: z.string().trim().min(1).max(120).optional(),
     note: z.string().trim().max(500).optional(),
   })
   .strict();
