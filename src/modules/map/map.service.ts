@@ -125,8 +125,10 @@ function toPinDto(row: repo.PinRow, totalQty: number) {
     receiverProvince: row.receiverProvince,
     receiverCity: row.receiverCity,
     totalQty,
-    readyBy: row.readyBy,
-    deliverBy: row.deliverBy,
+    pickupAfter: row.pickupAfter,
+    pickupBefore: row.pickupBefore,
+    deliverAfter: row.deliverAfter,
+    deliverBefore: row.deliverBefore,
 
     driver: row.driver
       ? { id: row.driver.id, name: row.driver.name, colorIndex: colorOf(row.driver) }

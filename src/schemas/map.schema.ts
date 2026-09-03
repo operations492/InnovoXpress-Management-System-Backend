@@ -29,7 +29,7 @@ export const mapPinsQuerySchema = z
     q: z.string().trim().min(1).max(100).optional(),
 
     /**
-     * The map's time axis is `deliverBy`, NOT `createdAt`.
+     * The map's time axis is `deliverBefore`, NOT `createdAt`.
      *
      * The consignments list filters on createdAt, which for a map would drop an
      * order created Monday for Tuesday delivery out of a Tuesday view. Send

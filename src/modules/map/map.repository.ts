@@ -33,8 +33,10 @@ const pinSelect = {
   receiverLine1: true,
   receiverProvince: true,
   receiverCity: true,
-  readyBy: true,
-  deliverBy: true,
+  pickupAfter: true,
+  pickupBefore: true,
+  deliverAfter: true,
+  deliverBefore: true,
   driver: { select: { id: true, name: true, mapColorIndex: true } },
 } satisfies Prisma.ConsignmentSelect;
 
@@ -72,13 +74,13 @@ export interface PinFilters {
  * the same class of bug as the consignments list, where `unassigned=true`
  * overwrites `driverId`.
  *
- * The time axis is `deliverBy`/`deliveredAt`, NOT `createdAt`: an order created
+ * The time axis is `deliverBefore`/`deliveredAt`, NOT `createdAt`: an order created
  * Monday for Tuesday delivery must not vanish from a Tuesday board.
  */
 export function buildPinWhere(f: PinFilters): Prisma.ConsignmentWhereInput {
   const and: Prisma.ConsignmentWhereInput[] = [
     // Open work, plus recent completions. Keyed on `deliveredAt` rather than
-    // `deliverBy`, because a delivered task may never have had a deadline.
+    // `deliverBefore`, because a delivered task may never have had a deadline.
     {
       OR: [
         { status: { not: ConsignmentStatus.DELIVERED } },
@@ -101,7 +103,7 @@ export function buildPinWhere(f: PinFilters): Prisma.ConsignmentWhereInput {
 
   if (f.from || f.to) {
     and.push({
-      deliverBy: {
+      deliverBefore: {
         ...(f.from ? { gte: f.from } : {}),
         ...(f.to ? { lte: f.to } : {}),
       },
@@ -145,7 +147,9 @@ export function findPins(where: Prisma.ConsignmentWhereInput, limit: number) {
   return prisma.consignment.findMany({
     where,
     select: pinSelect,
-    orderBy: [{ deliverBy: { sort: 'asc', nulls: 'last' } }, { createdAt: 'asc' }],
+    // No `nulls: last` any more — `deliverBefore` is NOT NULL, so Prisma drops
+    // the option and there is nothing to sort to the end.
+    orderBy: [{ deliverBefore: 'asc' }, { createdAt: 'asc' }],
     take: limit,
   });
 }

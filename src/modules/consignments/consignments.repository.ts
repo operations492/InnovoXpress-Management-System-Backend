@@ -41,8 +41,10 @@ export const summarySelect = {
   receiverProvince: true,
   receiverLat: true,
   receiverLng: true,
-  readyBy: true,
-  deliverBy: true,
+  pickupAfter: true,
+  pickupBefore: true,
+  deliverAfter: true,
+  deliverBefore: true,
   generalNote: true,
   createdAt: true,
   client: { select: { id: true, name: true, code: true } },
@@ -62,7 +64,9 @@ export function findFullById(id: string): Promise<FullConsignment | null> {
  * A date arriving as `2026-08-13` parses to midnight, which would exclude the
  * whole day it names. Treat a midnight boundary as "end of that day".
  */
-function inclusiveEnd(d: Date): Date {
+function inclusiveEnd(d: Date): Date 
+{
+  
   const isMidnight =
     d.getHours() === 0 &&
     d.getMinutes() === 0 &&
@@ -72,7 +76,9 @@ function inclusiveEnd(d: Date): Date {
   const end = new Date(d);
   end.setHours(23, 59, 59, 999);
   return end;
-}
+
+
+}  
 
 export function buildWhere(q: ListConsignmentsQuery): Prisma.ConsignmentWhereInput {
   const where: Prisma.ConsignmentWhereInput = {};

@@ -22,8 +22,8 @@ const stopSelect = {
       receiverCity: true,
       receiverLat: true,
       receiverLng: true,
-      readyBy: true,
-      deliverBy: true,
+      pickupAfter: true,
+      deliverBefore: true,
     },
   },
 } satisfies Prisma.RouteStopSelect;

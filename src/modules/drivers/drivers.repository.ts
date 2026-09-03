@@ -47,7 +47,7 @@ export function findConsignmentsForDriver(driverId: string, includeDelivered: bo
       driverId,
       ...(includeDelivered ? {} : { status: { not: ConsignmentStatus.DELIVERED } }),
     },
-    orderBy: [{ deliverBy: 'asc' }, { createdAt: 'asc' }],
+    orderBy: [{ deliverBefore: 'asc' }, { createdAt: 'asc' }],
     select: {
       id: true,
       orderNo: true,
@@ -67,8 +67,8 @@ export function findConsignmentsForDriver(driverId: string, includeDelivered: bo
       receiverProvince: true,
       receiverCity: true,
       receiverNotes: true,
-      readyBy: true,
-      deliverBy: true,
+      pickupAfter: true,
+      deliverBefore: true,
       generalNote: true,
       items: {
         select: { id: true, description: true, qty: true, weightKg: true, packageType: true },
