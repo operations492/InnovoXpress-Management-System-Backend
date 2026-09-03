@@ -81,17 +81,36 @@ export const createConsignmentSchema = z
     sender: senderSchema,
     receiver: receiverSchema,
 
-    readyBy: z.coerce.date().optional(),
-    deliverBy: z.coerce.date().optional(),
+    /*
+     * All four are REQUIRED. The columns are NOT NULL and the console's pickers
+     * cannot be cleared, so a request arriving without them is a client that is
+     * out of date — better a 400 naming the field than a Postgres 500.
+     */
+    pickupAfter: z.coerce.date(),
+    pickupBefore: z.coerce.date(),
+    deliverAfter: z.coerce.date(),
+    deliverBefore: z.coerce.date(),
 
     generalNote: trimmed(2000).optional(),
 
     items: z.array(itemSchema).min(1, 'At least one item is required'),
   })
   .strict()
-  .refine((v) => !v.readyBy || !v.deliverBy || v.deliverBy >= v.readyBy, {
-    message: 'deliverBy must not be earlier than readyBy',
-    path: ['deliverBy'],
+  /*
+   * The same three rules the database enforces, checked here first so the caller
+   * gets a 400 pointing at a field instead of a constraint-violation 500.
+   */
+  .refine((v) => v.pickupBefore >= v.pickupAfter, {
+    message: 'Pickup window cannot close before it opens',
+    path: ['pickupBefore'],
+  })
+  .refine((v) => v.deliverBefore >= v.deliverAfter, {
+    message: 'Delivery window cannot close before it opens',
+    path: ['deliverBefore'],
+  })
+  .refine((v) => v.deliverBefore >= v.pickupAfter, {
+    message: 'Delivery deadline cannot fall before collection may start',
+    path: ['deliverBefore'],
   });
 
 export const updateConsignmentSchema = z
@@ -101,8 +120,14 @@ export const updateConsignmentSchema = z
     priority: z.enum(Priority).optional(),
     sender: senderSchema.optional(),
     receiver: receiverSchema.optional(),
-    readyBy: z.coerce.date().nullable().optional(),
-    deliverBy: z.coerce.date().nullable().optional(),
+    /*
+     * Optional but NOT nullable: a partial edit may leave a window alone, but it
+     * can never blank one — the columns are NOT NULL.
+     */
+    pickupAfter: z.coerce.date().optional(),
+    pickupBefore: z.coerce.date().optional(),
+    deliverAfter: z.coerce.date().optional(),
+    deliverBefore: z.coerce.date().optional(),
     generalNote: trimmed(2000).nullable().optional(),
     /** Omit to leave items untouched; supply to replace the set by id. */
     items: z.array(itemSchema).min(1).optional(),

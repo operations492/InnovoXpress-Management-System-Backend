@@ -22,10 +22,25 @@ ALTER TABLE items DROP CONSTRAINT IF EXISTS items_weight_non_negative;
 ALTER TABLE items ADD CONSTRAINT items_weight_non_negative
   CHECK ("weightKg" IS NULL OR "weightKg" >= 0);
 
--- The delivery window cannot close before it opens.
+-- The four planning windows, all NOT NULL, all ordered.
+--
+-- Three rules rather than one: each window must not close before it opens, and
+-- the delivery deadline cannot fall before collection is even permitted to
+-- start. No NULL guards, because the columns are mandatory — the console always
+-- sends four values and the pickers cannot be cleared.
 ALTER TABLE consignments DROP CONSTRAINT IF EXISTS consignments_window_ordered;
-ALTER TABLE consignments ADD CONSTRAINT consignments_window_ordered
-  CHECK ("readyBy" IS NULL OR "deliverBy" IS NULL OR "deliverBy" >= "readyBy");
+
+ALTER TABLE consignments DROP CONSTRAINT IF EXISTS consignments_pickup_window_ordered;
+ALTER TABLE consignments ADD CONSTRAINT consignments_pickup_window_ordered
+  CHECK ("pickupBefore" >= "pickupAfter");
+
+ALTER TABLE consignments DROP CONSTRAINT IF EXISTS consignments_deliver_window_ordered;
+ALTER TABLE consignments ADD CONSTRAINT consignments_deliver_window_ordered
+  CHECK ("deliverBefore" >= "deliverAfter");
+
+ALTER TABLE consignments DROP CONSTRAINT IF EXISTS consignments_windows_sequential;
+ALTER TABLE consignments ADD CONSTRAINT consignments_windows_sequential
+  CHECK ("deliverBefore" >= "pickupAfter");
 
 -- Address text (city / province / postal code) is deliberately unconstrained.
 -- The console fills it from the geocoder and lets the operator overrule it; the

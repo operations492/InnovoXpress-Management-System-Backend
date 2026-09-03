@@ -37,6 +37,7 @@ export const PRIORITY_LABELS: Record<Priority, string> = {
 export const TASK_TYPE_LABELS: Record<TaskType, string> = {
   DELIVERY: 'Delivery',
   PICKUP: 'Pickup',
+  PICKUP_AND_DELIVERY: 'Pickup & Delivery',
 };
 
 export const POD_LEG_LABELS: Record<PodLeg, string> = {

@@ -233,7 +233,7 @@ export interface TripPlan {
  *
  * A heuristic, not a proof: it solves the travelling-salesman problem by insertion,
  * landing within a few percent of optimal in milliseconds. It also has no idea about
- * `deliverBy` — it minimises driving time and nothing else.
+ * `deliverBefore` — it minimises driving time and nothing else.
  */
 export async function optimiseTrip(
   points: LatLng[],

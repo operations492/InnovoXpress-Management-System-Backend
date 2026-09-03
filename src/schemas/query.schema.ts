@@ -23,7 +23,7 @@ export const listConsignmentsQuerySchema = z
     pageSize: z.coerce.number().int().min(1).max(100).default(20),
 
     sort: z
-      .enum(['createdAt', 'orderNo', 'status', 'readyBy', 'deliverBy'])
+      .enum(['createdAt', 'orderNo', 'status', 'pickupAfter', 'deliverBefore'])
       .default('createdAt'),
     order: z.enum(['asc', 'desc']).default('desc'),
   })

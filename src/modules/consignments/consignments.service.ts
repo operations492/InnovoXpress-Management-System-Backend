@@ -105,8 +105,10 @@ function toSummary(row: repo.SummaryRow) {
     receiverProvince: row.receiverProvince,
     receiverLat: row.receiverLat,
     receiverLng: row.receiverLng,
-    readyBy: row.readyBy,
-    deliverBy: row.deliverBy,
+    pickupAfter: row.pickupAfter,
+    pickupBefore: row.pickupBefore,
+    deliverAfter: row.deliverAfter,
+    deliverBefore: row.deliverBefore,
     generalNote: row.generalNote,
     createdAt: row.createdAt,
     ...totalsOf(row.items),
@@ -148,8 +150,10 @@ function toDetail(c: repo.FullConsignment) {
       lat: c.receiverLat,
       lng: c.receiverLng,
     },
-    readyBy: c.readyBy,
-    deliverBy: c.deliverBy,
+    pickupAfter: c.pickupAfter,
+    pickupBefore: c.pickupBefore,
+    deliverAfter: c.deliverAfter,
+    deliverBefore: c.deliverBefore,
     assignedAt: c.assignedAt,
     pickedUpAt: c.pickedUpAt,
     deliveredAt: c.deliveredAt,
@@ -224,8 +228,10 @@ export async function createConsignment(input: CreateConsignmentInput, actor: Ac
       taskType: input.taskType,
       ...senderColumns(input.sender),
       ...receiverColumns(input.receiver),
-      readyBy: input.readyBy ?? null,
-      deliverBy: input.deliverBy ?? null,
+      pickupAfter: input.pickupAfter,
+      pickupBefore: input.pickupBefore,
+      deliverAfter: input.deliverAfter,
+      deliverBefore: input.deliverBefore,
       generalNote: input.generalNote ?? null,
       createdByUserId: actor.id,
       lastUpdatedByUserId: actor.id,
@@ -506,8 +512,10 @@ export async function updateConsignment(
   if (input.clientReference !== undefined) data.clientReference = input.clientReference;
   if (input.taskType !== undefined) data.taskType = input.taskType;
   if (input.priority !== undefined) data.priority = input.priority;
-  if (input.readyBy !== undefined) data.readyBy = input.readyBy;
-  if (input.deliverBy !== undefined) data.deliverBy = input.deliverBy;
+  if (input.pickupAfter !== undefined) data.pickupAfter = input.pickupAfter;
+  if (input.pickupBefore !== undefined) data.pickupBefore = input.pickupBefore;
+  if (input.deliverAfter !== undefined) data.deliverAfter = input.deliverAfter;
+  if (input.deliverBefore !== undefined) data.deliverBefore = input.deliverBefore;
   if (input.generalNote !== undefined) data.generalNote = input.generalNote;
   if (input.sender) Object.assign(data, senderColumns(input.sender));
   if (input.receiver) Object.assign(data, receiverColumns(input.receiver));

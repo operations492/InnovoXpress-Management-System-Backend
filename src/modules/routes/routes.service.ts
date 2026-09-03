@@ -87,8 +87,8 @@ async function present(route: repo.RouteRow) {
       receiverLine1: c.receiverLine1,
       receiverProvince: c.receiverProvince,
       receiverCity: c.receiverCity,
-      readyBy: c.readyBy,
-      deliverBy: c.deliverBy,
+      pickupAfter: c.pickupAfter,
+      deliverBefore: c.deliverBefore,
       /** Where the plan put this stop, not where the order says it is today. */
       lat: s.plannedLat,
       lng: s.plannedLng,

@@ -51,6 +51,10 @@ enum Priority {
 enum TaskType {
   DELIVERY
   PICKUP
+  /// Every job in this system is a collection followed by a drop, so this is
+  /// what a consignment actually is. The older two are kept because enum values
+  /// cannot be removed without rewriting every row that used them.
+  PICKUP_AND_DELIVERY
 }
 
 /// Ranked, low to high: driver < operator < admin (see middleware/rbac.ts).
@@ -315,8 +319,16 @@ model Consignment {
   receiverLng Float?
 
   // --- scheduling ---
-  readyBy   DateTime?
-  deliverBy DateTime?
+  /// Four planning windows, all REQUIRED and all ordered by CHECK constraints:
+  /// pickupBefore >= pickupAfter, deliverBefore >= deliverAfter, and
+  /// deliverBefore >= pickupAfter (a deadline cannot precede collection).
+  ///
+  /// `pickupAfter` and `deliverBefore` are the old `readyBy` / `deliverBy`
+  /// renamed — they always meant "earliest collection" and "delivery deadline".
+  pickupAfter   DateTime
+  pickupBefore  DateTime
+  deliverAfter  DateTime
+  deliverBefore DateTime
 
   // --- lifecycle stamps, written by the transition that causes them ---
   assignedAt  DateTime?
@@ -343,7 +355,7 @@ model Consignment {
   @@index([status])
   @@index([createdAt])
   /// The dispatch map bounds itself by delivery deadline, not creation date.
-  @@index([deliverBy])
+  @@index([deliverBefore])
   @@map("consignments")
 }
 

@@ -140,6 +140,11 @@ async function main() {
   }
 
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+
+  const HOUR = 3_600_000;
+  // 08:00 today, so the whole batch shares one plausible working day.
+  const windowStart = new Date(new Date().setHours(8, 0, 0, 0));
+
   const rows: Prisma.ConsignmentCreateManyInput[] = [];
 
   for (let i = 0; i < COUNT; i += 1) {
@@ -182,8 +187,12 @@ async function main() {
       receiverLat: drop.lat,
       receiverLng: drop.lng,
 
-      readyBy: null,
-      deliverBy: null,
+      // A same-day run: collect this morning, deliver by end of day. The four
+      // windows are NOT NULL, so every seeded row has to carry a real plan.
+      pickupAfter: windowStart,
+      pickupBefore: new Date(windowStart.getTime() + 3 * HOUR),
+      deliverAfter: new Date(windowStart.getTime() + 3 * HOUR),
+      deliverBefore: new Date(windowStart.getTime() + 9 * HOUR),
       generalNote: null,
       createdByUserId: admin?.id ?? null,
       lastUpdatedByUserId: admin?.id ?? null,

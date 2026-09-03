@@ -560,6 +560,8 @@ async function main() {
    */
   const now = Date.now();
   const HOUR = 3_600_000;
+  /** 08:00 today — one plausible working day shared by every seeded order. */
+  const seedWindowStart = new Date(new Date().setHours(8, 0, 0, 0));
 
   for (const [i, d] of DRIVERS.entries()) {
     const onShift = i < ON_SHIFT_COUNT;
@@ -643,6 +645,16 @@ async function main() {
             assignedAt: driver ? new Date() : null,
             priority: order.priority,
             taskType: order.taskType,
+
+            /*
+             * All four windows are NOT NULL, so every seeded order carries a
+             * plausible same-day plan: collect from 08:00, three hours to load,
+             * delivered by close of business.
+             */
+            pickupAfter: seedWindowStart,
+            pickupBefore: new Date(seedWindowStart.getTime() + 3 * HOUR),
+            deliverAfter: new Date(seedWindowStart.getTime() + 3 * HOUR),
+            deliverBefore: new Date(seedWindowStart.getTime() + 9 * HOUR),
 
             senderName: order.sender.name,
             senderPhone: order.sender.phone,
