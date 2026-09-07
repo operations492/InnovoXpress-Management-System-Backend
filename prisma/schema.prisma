@@ -403,6 +403,18 @@ model ProofOfDelivery {
   /// existed has no answer, and inventing one would be worse than none.
   signedByName String?
 
+  /// How many pieces the driver actually counted at this stop.
+  ///
+  /// Deliberately NOT constrained to match the order's own total. A short
+  /// pickup is the single most useful thing a driver can tell dispatch, and a
+  /// column that only accepts the expected number would force them to record a
+  /// figure they know is wrong. The app confirms the discrepancy with the
+  /// driver; this stores whatever they stood by.
+  ///
+  /// Nullable for the same reason as `signedByName` — proofs predating the
+  /// column were never counted.
+  itemCount Int?
+
   capturedAt         DateTime @default(now())
   capturedByDriverId String?
   capturedByDriver   Driver?  @relation(fields: [capturedByDriverId], references: [id], onDelete: SetNull)
