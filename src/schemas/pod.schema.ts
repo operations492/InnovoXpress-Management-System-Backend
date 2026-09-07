@@ -22,6 +22,10 @@ export const podBodySchema = z
     /// here; optional on the wire so an older client keeps working, and so a
     /// handover genuinely nobody named is still recordable.
     signedByName: z.string().trim().min(1).max(120).optional(),
+    /// Pieces counted at this stop. Bounded but not checked against the order:
+    /// see the schema comment on `ProofOfDelivery.itemCount` for why a mismatch
+    /// is data worth keeping rather than a 400.
+    itemCount: z.coerce.number().int().min(1, 'At least one item must be counted').max(9999).optional(),
     note: z.string().trim().max(500).optional(),
   })
   .strict();

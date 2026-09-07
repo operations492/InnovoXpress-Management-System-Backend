@@ -7,7 +7,18 @@ import { env } from '../src/config/env.js';
 // schema, so anything that grants or defines policy must run after it.
 // positions.sql calls public.is_ops_user(), which map.sql creates, so it must
 // follow it.
-const SQL_FILES = ['constraints.sql', 'chat.sql', 'map.sql', 'positions.sql', 'routes.sql'];
+//
+// pod.sql is last and depends on nothing. It is the odd one out: plain columns
+// rather than constraints, carried here because `prisma db push` cannot be run
+// against this database at all. See the header of that file.
+const SQL_FILES = [
+  'constraints.sql',
+  'chat.sql',
+  'map.sql',
+  'positions.sql',
+  'routes.sql',
+  'pod.sql',
+];
 
 /**
  * Applies the SQL files in prisma/sql, in order.

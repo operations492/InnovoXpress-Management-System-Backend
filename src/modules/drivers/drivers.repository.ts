@@ -70,6 +70,10 @@ export function findConsignmentsForDriver(driverId: string, includeDelivered: bo
       pickupAfter: true,
       deliverBefore: true,
       generalNote: true,
+      /// Lets the driver app order its list by most recently touched. Moves on
+      /// every write — assignment, each status step, proof capture — so it is
+      /// the only field in this payload that answers "what changed last".
+      updatedAt: true,
       items: {
         select: { id: true, description: true, qty: true, weightKg: true, packageType: true },
       },
