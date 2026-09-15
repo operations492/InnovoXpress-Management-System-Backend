@@ -262,6 +262,21 @@ model User {
 
   chatMemberships ChatMember[]
 
+  /// Where to push a notification for this person — an Expo push token, looking
+  /// like `ExponentPushToken[xxxxxxxx]`.
+  ///
+  /// On the USER and not on the Driver, because it identifies a signed-in
+  /// installation rather than a roster entry: an operator gets notifications
+  /// too, and a driver who hands their phone to a colleague must not keep
+  /// receiving the other person's jobs.
+  ///
+  /// Nullable and disposable. The token is not a secret and not an identity —
+  /// it is a delivery address that the OS may rotate at any time, so it is
+  /// re-registered on every sign-in and simply overwritten. Nothing depends on
+  /// it being present; a null token means "this person gets no push", which is
+  /// exactly right for a browser-only operator.
+  pushToken String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -435,6 +450,18 @@ model ProofOfDelivery {
   /// who signed. Nullable because every proof captured before this column
   /// existed has no answer, and inventing one would be worse than none.
   signedByName String?
+
+  /// How many pieces the driver actually counted at this stop.
+  ///
+  /// Deliberately NOT constrained to match the order's own total. A short
+  /// pickup is the single most useful thing a driver can tell dispatch, and a
+  /// column that only accepts the expected number would force them to record a
+  /// figure they know is wrong. The app confirms the discrepancy with the
+  /// driver; this stores whatever they stood by.
+  ///
+  /// Nullable for the same reason as `signedByName` — proofs predating the
+  /// column were never counted.
+  itemCount Int?
 
   capturedAt         DateTime @default(now())
   capturedByDriverId String?
