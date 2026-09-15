@@ -37,6 +37,12 @@ const pinSelect = {
   pickupBefore: true,
   deliverAfter: true,
   deliverBefore: true,
+  // The pickup end's address, so the map can plot and label either end of a job.
+  senderName: true,
+  senderLine1: true,
+  senderProvince: true,
+  senderCity: true,
+  client: { select: { name: true } },
   driver: { select: { id: true, name: true, mapColorIndex: true } },
 } satisfies Prisma.ConsignmentSelect;
 
