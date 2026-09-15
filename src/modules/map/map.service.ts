@@ -118,6 +118,11 @@ function toPinDto(row: repo.PinRow, totalQty: number) {
     senderLng: row.senderLng,
     receiverLat: row.receiverLat,
     receiverLng: row.receiverLng,
+    clientName: row.client.name,
+    senderName: row.senderName,
+    senderLine1: row.senderLine1,
+    senderProvince: row.senderProvince,
+    senderCity: row.senderCity,
 
     // The click-widget, riding along.
     receiverName: row.receiverName,
