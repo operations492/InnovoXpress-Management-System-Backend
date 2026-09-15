@@ -101,6 +101,33 @@ export function listMembersForConversations(conversationIds: string[]) {
   });
 }
 
+/**
+ * Every phone in this thread except the sender's.
+ *
+ * Realtime broadcast already delivers to anyone with the app OPEN; this is for
+ * everybody else. A driver's phone is in a pocket for most of a shift, so
+ * without it a message from dispatch waits until they next happen to look.
+ *
+ * The sender is excluded rather than filtered later — buzzing somebody for their
+ * own message is the most obvious bug this could have. Inactive accounts are
+ * skipped for the same reason they are everywhere else: a deactivated user is
+ * one whose access has been withdrawn, and a notification is access.
+ *
+ * `participantSelect` is deliberately not reused here. That shape is what chat
+ * exposes to clients; this never leaves the server, and a push token has no
+ * business in a DTO.
+ */
+export function findPushRecipients(conversationId: string, excludeUserId: string) {
+  return prisma.chatMember.findMany({
+    where: {
+      conversationId,
+      userId: { not: excludeUserId },
+      user: { active: true, pushToken: { not: null } },
+    },
+    select: { user: { select: { pushToken: true } } },
+  });
+}
+
 export function addMembers(conversationId: string, userIds: string[]) {
   return prisma.chatMember.createMany({
     // Re-adding someone already present is a no-op, not a 409.
