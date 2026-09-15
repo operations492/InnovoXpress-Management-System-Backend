@@ -115,6 +115,8 @@ export const createConsignmentSchema = z
 
 export const updateConsignmentSchema = z
   .object({
+    /** Optional: move the order to another client. Validated against the clients table. */
+    clientId: z.string().min(1).optional(),
     clientReference: trimmed(64).nullable().optional(),
     taskType: z.enum(TaskType).optional(),
     priority: z.enum(Priority).optional(),

@@ -163,7 +163,7 @@ export async function clientReferenceTaken(
 export function findForUpdate(id: string) {
   return prisma.consignment.findUnique({
     where: { id },
-    select: { id: true, clientId: true, status: true, driverId: true },
+    select: { id: true, clientId: true, clientReference: true, status: true, driverId: true },
   });
 }
 
