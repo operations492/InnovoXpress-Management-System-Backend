@@ -8,6 +8,7 @@ import { errorHandler } from './middleware/errorHandler.js';
 
 import authRoutes from './modules/auth/auth.routes.js';
 import referenceRoutes from './modules/reference/reference.routes.js';
+import serviceLevelRoutes from './modules/serviceLevels/serviceLevels.routes.js';
 import consignmentRoutes from './modules/consignments/consignments.routes.js';
 import driverRoutes from './modules/drivers/drivers.routes.js';
 import userRoutes from './modules/users/users.routes.js';
@@ -37,6 +38,7 @@ app.get(
 
 app.use('/api/auth', authRoutes);
 app.use('/api/reference', referenceRoutes);
+app.use('/api/service-levels', serviceLevelRoutes);
 app.use('/api/consignments', consignmentRoutes);
 app.use('/api/drivers', driverRoutes);
 app.use('/api/users', userRoutes);

@@ -193,11 +193,24 @@ function drawSheet(doc: PDFKit.PDFDocument, o: Order, code: Buffer, title: strin
   doc.font('Helvetica').fontSize(8).fillColor(INK);
   let totalQty = 0;
   let totalWeight = 0;
+  let totalCubic = 0;
   for (const it of o.items) {
-    const w = num(it.weightKg) * it.qty;
+    const w = num(it.weightLb);
     totalQty += it.qty;
     totalWeight += w;
-    const cells = [it.barcode ?? '', String(it.qty), it.description, w ? w.toFixed(1) : '0', '0 x 0 x 0', '0'];
+    const L = num(it.lengthIn);
+    const Wd = num(it.widthIn);
+    const H = num(it.heightIn);
+    const cubic = L && Wd && H ? (L * Wd * H) / 61_023.744 : 0;
+    totalCubic += cubic;
+    const cells = [
+      it.barcode ?? '',
+      String(it.qty),
+      it.description,
+      w ? w.toFixed(1) : '0',
+      `${L || 0} x ${Wd || 0} x ${H || 0}`,
+      cubic ? cubic.toFixed(4) : '0',
+    ];
     cells.forEach((v, i) => {
       const c = cols[i]!;
       doc.text(v, c.x, y, { width: c.w, align: c.align ?? 'left' });
@@ -211,7 +224,7 @@ function drawSheet(doc: PDFKit.PDFDocument, o: Order, code: Buffer, title: strin
   doc.font('Helvetica').fontSize(8).fillColor(INK);
   doc.text(`Total Qty ${totalQty}`, m + 60, totalsY + 4);
   doc.text(`Total Weight ${totalWeight.toFixed(1)}`, m + 300, totalsY + 4);
-  doc.text('Total Cubic 0', m + 470, totalsY + 4);
+  doc.text(`Total Cubic ${totalCubic.toFixed(4)}`, m + 470, totalsY + 4);
 
   doc.text('Office Use', m + 100, totalsY + 22);
   doc.fontSize(7.5).text(

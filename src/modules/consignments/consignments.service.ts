@@ -60,26 +60,59 @@ function receiverColumns(r: CreateConsignmentInput['receiver']) {
 
 function itemColumns(i: ItemInput) {
   return {
+    barcode: i.barcode ?? null,
     description: i.description,
     qty: i.qty,
-    weightKg: i.weightKg ?? null,
-    packageType: i.packageType ?? null,
-    barcode: i.barcode ?? null,
+    weightLb: i.weightLb ?? null,
+    lengthIn: i.lengthIn ?? null,
+    widthIn: i.widthIn ?? null,
+    heightIn: i.heightIn ?? null,
+  };
+}
+
+const CUBIC_INCHES_PER_CUBIC_METRE = 61_023.744;
+
+type ItemDims = {
+  lengthIn: Prisma.Decimal | null;
+  widthIn: Prisma.Decimal | null;
+  heightIn: Prisma.Decimal | null;
+};
+
+/**
+ * Cubic volume of one line in cubic metres, or null when any dimension is
+ * missing. Derived on every read rather than stored, so it can never disagree
+ * with the dimensions it comes from. Four decimals, matching the clients' sheets.
+ */
+function cubicOf(i: ItemDims): number | null {
+  if (i.lengthIn === null || i.widthIn === null || i.heightIn === null) return null;
+  const cubicInches = Number(i.lengthIn) * Number(i.widthIn) * Number(i.heightIn);
+  return Number((cubicInches / CUBIC_INCHES_PER_CUBIC_METRE).toFixed(4));
+}
+
+/**
+ * `weightLb` is the weight of the whole line, not a per-unit weight, so the
+ * order total is a plain sum and is NOT multiplied by qty. Cubic likewise.
+ */
+function totalsOf(items: Array<{ qty: number; weightLb: Prisma.Decimal | null } & ItemDims>) {
+  return {
+    itemCount: items.length,
+    totalQty: items.reduce((sum, i) => sum + i.qty, 0),
+    totalWeightLb: Number(
+      items.reduce((sum, i) => sum + (i.weightLb === null ? 0 : Number(i.weightLb)), 0).toFixed(3),
+    ),
+    totalCubic: Number(items.reduce((sum, i) => sum + (cubicOf(i) ?? 0), 0).toFixed(4)),
   };
 }
 
 /**
- * `weightKg` is the weight of the whole line, not a per-unit weight, so the
- * order total is a plain sum and is NOT multiplied by qty.
+ * Resolve a service-level id to a connectable row, or explain why not. Retired
+ * levels are refused for new work the same way an inactive client is.
  */
-function totalsOf(items: Array<{ qty: number; weightKg: Prisma.Decimal | null }>) {
-  return {
-    itemCount: items.length,
-    totalQty: items.reduce((sum, i) => sum + i.qty, 0),
-    totalWeightKg: Number(
-      items.reduce((sum, i) => sum + (i.weightKg === null ? 0 : Number(i.weightKg)), 0).toFixed(3),
-    ),
-  };
+async function resolveServiceLevel(id: string) {
+  const level = await repo.findServiceLevelById(id);
+  if (!level) throw AppError.badRequest('Unknown service level');
+  if (!level.active) throw AppError.badRequest(`Service level "${level.name}" is no longer offered`);
+  return level;
 }
 
 function toSummary(row: repo.SummaryRow) {
@@ -89,6 +122,7 @@ function toSummary(row: repo.SummaryRow) {
     clientReference: row.clientReference,
     client: row.client,
     driver: row.driver,
+    serviceLevel: row.serviceLevel,
     status: row.status,
     statusLabel: STATUS_LABELS[row.status],
     priority: row.priority,
@@ -122,6 +156,7 @@ function toDetail(c: repo.FullConsignment) {
     clientReference: c.clientReference,
     client: c.client,
     driver: c.driver,
+    serviceLevel: c.serviceLevel,
     status: c.status,
     statusLabel: STATUS_LABELS[c.status],
     priority: c.priority,
@@ -160,11 +195,14 @@ function toDetail(c: repo.FullConsignment) {
     generalNote: c.generalNote,
     items: c.items.map((i) => ({
       id: i.id,
+      barcode: i.barcode,
       description: i.description,
       qty: i.qty,
-      weightKg: num(i.weightKg),
-      packageType: i.packageType,
-      barcode: i.barcode,
+      weightLb: num(i.weightLb),
+      lengthIn: num(i.lengthIn),
+      widthIn: num(i.widthIn),
+      heightIn: num(i.heightIn),
+      cubic: cubicOf(i),
     })),
     totals: totalsOf(c.items),
     proofs: c.proofs.map((p) => ({
@@ -198,6 +236,8 @@ export async function createConsignment(input: CreateConsignmentInput, actor: Ac
   if (!client) throw AppError.badRequest('Unknown client');
   if (!client.active) throw AppError.badRequest(`Client "${client.name}" is inactive`);
 
+  const serviceLevel = input.serviceLevelId ? await resolveServiceLevel(input.serviceLevelId) : null;
+
   // Pre-check for a readable message; the composite unique index is the real guard.
   if (input.clientReference) {
     const taken = await repo.clientReferenceTaken(client.id, input.clientReference);
@@ -223,6 +263,7 @@ export async function createConsignment(input: CreateConsignmentInput, actor: Ac
       orderNo,
       clientReference: input.clientReference ?? null,
       client: { connect: { id: client.id } },
+      ...(serviceLevel ? { serviceLevel: { connect: { id: serviceLevel.id } } } : {}),
       status: ConsignmentStatus.UNASSIGNED,
       priority: input.priority,
       taskType: input.taskType,
@@ -521,6 +562,12 @@ export async function updateConsignment(
   const data: Prisma.ConsignmentUpdateInput = { lastUpdatedByUserId: actor.id };
 
   if (clientId !== existing.clientId) data.client = { connect: { id: clientId } };
+  if (input.serviceLevelId === null) {
+    data.serviceLevel = { disconnect: true };
+  } else if (input.serviceLevelId !== undefined) {
+    const level = await resolveServiceLevel(input.serviceLevelId);
+    data.serviceLevel = { connect: { id: level.id } };
+  }
   if (input.clientReference !== undefined) data.clientReference = input.clientReference;
   if (input.taskType !== undefined) data.taskType = input.taskType;
   if (input.priority !== undefined) data.priority = input.priority;
