@@ -13,6 +13,7 @@ import type {
   UpdateConsignmentInput,
 } from '../../schemas/consignment.schema.js';
 import type { ListConsignmentsQuery } from '../../schemas/query.schema.js';
+import { sendPush } from '../../utils/push.js';
 import * as repo from './consignments.repository.js';
 
 export interface Actor {
@@ -352,7 +353,13 @@ export async function assignDriverBulk(input: BulkAssignInput, actor: Actor) {
 
   for (const id of ids) {
     try {
-      const updated = await assignDriver(id, { driverId: input.driverId, note: input.note }, actor);
+      // `false` — one summary is sent below instead of one buzz per order.
+      const updated = await assignDriver(
+        id,
+        { driverId: input.driverId, note: input.note },
+        actor,
+        false,
+      );
       assigned.push(updated.id);
     } catch (err) {
       if (!(err instanceof AppError)) throw err;
@@ -365,6 +372,15 @@ export async function assignDriverBulk(input: BulkAssignInput, actor: Actor) {
     }
   }
 
+  /*
+   * One notification for the whole batch, and only if something actually landed.
+   *
+   * A dispatcher assigning twelve orders is a single decision from the driver's
+   * point of view, and twelve buzzes in a row is how a driver learns to swipe
+   * the app's notifications away without reading them.
+   */
+  if (assigned.length > 0) void notifyAssignedBulk(input.driverId, assigned.length);
+
   return {
     driverId: input.driverId,
     assigned,
@@ -373,10 +389,69 @@ export async function assignDriverBulk(input: BulkAssignInput, actor: Actor) {
   };
 }
 
+/**
+ * Tell a driver's phone that work has landed.
+ *
+ * Fire-and-forget, and never awaited by the caller: the order is already
+ * assigned and committed by the time this runs, so making a dispatcher wait on
+ * Expo's servers would only slow down the assign button. `sendPush` swallows its
+ * own failures for the same reason — a phone that is off must not turn a
+ * successful assignment into a 500.
+ */
+async function notifyAssigned(driverId: string, orderNo: string, consignmentId: string) {
+  const token = await repo.findDriverPushToken(driverId);
+  if (!token) return;
+
+  await sendPush([
+    {
+      to: token,
+      title: 'New job assigned',
+      body: `${orderNo} is on your run. Open the app to see the pickup.`,
+      // Small on purpose — Expo and APNs both cap the message at 4KB, and the
+      // app refetches the real record the moment it opens.
+      data: { kind: 'task-assigned', taskId: consignmentId },
+    },
+  ]);
+}
+
+/**
+ * Tell a driver a job has come OFF their run.
+ *
+ * The mirror of the one above, and it earns its place: without it a driver keeps
+ * driving to a pickup that dispatch moved to someone else an hour ago. They
+ * cannot even discover it themselves — the order stops being theirs the instant
+ * it is reassigned, so opening it answers 403 and the list simply shows one job
+ * fewer, with nothing to say which.
+ *
+ * No `taskId`: there is no longer a record this driver may open, so the tap
+ * lands on their work list rather than on a screen that would 403.
+ */
+async function notifyUnassigned(driverId: string, orderNo: string) {
+  const token = await repo.findDriverPushToken(driverId);
+  if (!token) return;
+
+  await sendPush([
+    {
+      to: token,
+      title: 'Job removed from your run',
+      body: `${orderNo} is no longer yours. Check your jobs before you set off.`,
+      data: { kind: 'task-removed' },
+    },
+  ]);
+}
+
 export async function assignDriver(
   consignmentId: string,
   input: AssignDriverInput,
   actor: Actor,
+  /**
+   * False when this is one row of a bulk assign.
+   *
+   * `assignDriverBulk` calls straight through here in a loop, so notifying from
+   * inside would buzz a driver ten times for one action by a dispatcher. The
+   * bulk path silences these and sends a single summary instead.
+   */
+  notify = true,
 ) {
   const existing = await repo.findForUpdate(consignmentId);
   if (!existing) throw AppError.notFound('Consignment not found');
@@ -446,7 +521,16 @@ export async function assignDriver(
     conflictMessage: 'The order changed while you were assigning it, please retry',
   });
 
-  return getConsignment(consignmentId);
+  const assigned = await getConsignment(consignmentId);
+
+  if (notify) {
+    void notifyAssigned(driver.id, assigned.orderNo, consignmentId);
+    // A swap is two events, not one. The driver losing the job needs telling at
+    // least as much as the one gaining it.
+    if (previousDriver) void notifyUnassigned(previousDriver.id, assigned.orderNo);
+  }
+
+  return assigned;
 }
 
 /** Detach the driver and return the order to the dispatcher's queue. */
@@ -476,7 +560,10 @@ export async function unassignDriver(consignmentId: string, actor: Actor) {
     conflictMessage: 'The order changed while you were unassigning it, please retry',
   });
 
-  return getConsignment(consignmentId);
+  const unassigned = await getConsignment(consignmentId);
+  if (driver) void notifyUnassigned(driver.id, unassigned.orderNo);
+
+  return unassigned;
 }
 
 export async function updateConsignment(
@@ -539,4 +626,20 @@ export async function updateConsignment(
   });
 
   return getConsignment(id);
+}
+
+/** The batch counterpart of `notifyAssigned` — one message, whatever the count. */
+async function notifyAssignedBulk(driverId: string, count: number) {
+  const token = await repo.findDriverPushToken(driverId);
+  if (!token) return;
+
+  await sendPush([
+    {
+      to: token,
+      title: count === 1 ? 'New job assigned' : `${count} new jobs assigned`,
+      body: 'Open the app to see your run.',
+      // No id: the tap opens the list, because there is no single job to open.
+      data: { kind: 'tasks-assigned' },
+    },
+  ]);
 }

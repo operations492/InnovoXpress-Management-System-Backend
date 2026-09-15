@@ -2,6 +2,8 @@ import { Router } from 'express';
 import * as controller from './auth.controller.js';
 import { authenticate } from '../../middleware/auth.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
+import { validate } from '../../middleware/validate.js';
+import { pushTokenSchema } from '../../schemas/push.schema.js';
 
 const router = Router();
 
@@ -15,5 +17,19 @@ const router = Router();
  * correct.
  */
 router.get('/me', authenticate, asyncHandler(controller.me));
+
+/**
+ * Where to push notifications for whoever is signed in.
+ *
+ * Deliberately keyed off the TOKEN rather than taking a user id: a caller must
+ * never be able to redirect somebody else's notifications to their own phone by
+ * posting an id that is not theirs.
+ */
+router.post(
+  '/push-token',
+  authenticate,
+  validate(pushTokenSchema),
+  asyncHandler(controller.setPushToken),
+);
 
 export default router;

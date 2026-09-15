@@ -31,3 +31,14 @@ export async function me(userId: string) {
       : null,
   };
 }
+
+/**
+ * Register (or clear) this session's push token.
+ *
+ * Clearing is a real operation, not an oversight: the app posts `null` on sign
+ * out, so a shared or handed-over phone stops receiving the previous driver's
+ * jobs the moment they leave.
+ */
+export async function setPushToken(userId: string, pushToken: string | null) {
+  await repo.setPushToken(userId, pushToken);
+}
