@@ -143,6 +143,7 @@ export async function captureProof(
       photo: { path: photoPath, mime: photo.mime, bytes: files.photo!.size },
       signature: { path: signaturePath, mime: signature.mime, bytes: files.signature!.size },
       signedByName: body.signedByName,
+      itemCount: body.itemCount,
       driverId: body.capturedByDriverId ?? consignment.driverId,
       actorId: actor.id,
       actorEmail: actor.email,
@@ -181,6 +182,7 @@ export async function getProofs(consignmentId: string) {
       leg: p.leg,
       capturedAt: p.capturedAt,
       signedByName: p.signedByName,
+      itemCount: p.itemCount,
       capturedByDriver: p.capturedByDriver,
       photo: {
         mime: p.photoMime,

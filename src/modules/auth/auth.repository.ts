@@ -31,3 +31,18 @@ export function findProfileWithDriver(id: string) {
     },
   });
 }
+
+/**
+ * Store where to push notifications for this person.
+ *
+ * A plain overwrite. The token is a delivery address the OS may rotate, not an
+ * identity, so the newest one always wins and there is nothing to reconcile.
+ */
+export function setPushToken(id: string, pushToken: string | null) {
+  return prisma.user.update({
+    where: { id },
+    data: { pushToken },
+    select: { id: true },
+  });
+}
+
