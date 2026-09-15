@@ -494,21 +494,33 @@ export async function updateConsignment(
     );
   }
 
-  if (input.clientReference) {
-    const taken = await repo.clientReferenceTaken(
-      existing.clientId,
-      input.clientReference,
-      id,
-    );
+  // Moving the order to another client: the target must exist and be active, the
+  // same checks a create makes. The order number keeps its original prefix — it
+  // is an identifier already printed on labels, not a description of the client.
+  let clientId = existing.clientId;
+  if (input.clientId !== undefined && input.clientId !== existing.clientId) {
+    const client = await repo.findClientById(input.clientId);
+    if (!client) throw AppError.badRequest('Unknown client');
+    if (!client.active) throw AppError.badRequest(`Client "${client.name}" is inactive`);
+    clientId = client.id;
+  }
+
+  // References are unique per client, so a client change re-checks the order's
+  // existing reference against the new client's orders.
+  const clientReference =
+    input.clientReference !== undefined ? input.clientReference : existing.clientReference;
+  if (clientReference && (input.clientReference || clientId !== existing.clientId)) {
+    const taken = await repo.clientReferenceTaken(clientId, clientReference, id);
     if (taken) {
       throw AppError.conflict(
-        `Reference "${input.clientReference}" is already used by another order of this client`,
+        `Reference "${clientReference}" is already used by another order of this client`,
       );
     }
   }
 
   const data: Prisma.ConsignmentUpdateInput = { lastUpdatedByUserId: actor.id };
 
+  if (clientId !== existing.clientId) data.client = { connect: { id: clientId } };
   if (input.clientReference !== undefined) data.clientReference = input.clientReference;
   if (input.taskType !== undefined) data.taskType = input.taskType;
   if (input.priority !== undefined) data.priority = input.priority;
