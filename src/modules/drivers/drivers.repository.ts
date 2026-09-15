@@ -71,7 +71,16 @@ export function findConsignmentsForDriver(driverId: string, includeDelivered: bo
       deliverBefore: true,
       generalNote: true,
       items: {
-        select: { id: true, description: true, qty: true, weightKg: true, packageType: true },
+        select: {
+          id: true,
+          barcode: true,
+          description: true,
+          qty: true,
+          weightLb: true,
+          lengthIn: true,
+          widthIn: true,
+          heightIn: true,
+        },
       },
       proofs: { select: { leg: true, capturedAt: true } },
     },

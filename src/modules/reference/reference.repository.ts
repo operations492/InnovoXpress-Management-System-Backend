@@ -10,6 +10,14 @@ export function findActiveClients() {
   });
 }
 
+export function findActiveServiceLevels() {
+  return prisma.serviceLevel.findMany({
+    where: { active: true },
+    select: { id: true, name: true },
+    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+  });
+}
+
 export function findActiveDrivers() {
   return prisma.driver.findMany({
     where: { active: true },

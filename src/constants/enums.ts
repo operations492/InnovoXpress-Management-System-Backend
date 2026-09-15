@@ -1,13 +1,12 @@
 import {
   ConsignmentStatus,
-  PackageType,
   PodLeg,
   Priority,
   TaskType,
   UserRole,
 } from '@prisma/client';
 
-export { ConsignmentStatus, PackageType, PodLeg, Priority, TaskType, UserRole };
+export { ConsignmentStatus, PodLeg, Priority, TaskType, UserRole };
 
 export const STATUS_LABELS: Record<ConsignmentStatus, string> = {
   UNASSIGNED: 'Unassigned',
@@ -18,14 +17,6 @@ export const STATUS_LABELS: Record<ConsignmentStatus, string> = {
   EN_ROUTE_TO_DELIVERY: 'En Route to Delivery',
   AT_DELIVERY: 'At Delivery',
   DELIVERED: 'Delivered',
-};
-
-export const PACKAGE_TYPE_LABELS: Record<PackageType, string> = {
-  BOX: 'Box',
-  BOTTLE: 'Bottle',
-  ENVELOPE: 'Envelope',
-  PALLET: 'Pallet',
-  OTHER: 'Other',
 };
 
 export const PRIORITY_LABELS: Record<Priority, string> = {

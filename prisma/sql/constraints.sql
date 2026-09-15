@@ -20,7 +20,16 @@ ALTER TABLE items ADD CONSTRAINT items_qty_positive
 -- Weight, when supplied, is never negative.
 ALTER TABLE items DROP CONSTRAINT IF EXISTS items_weight_non_negative;
 ALTER TABLE items ADD CONSTRAINT items_weight_non_negative
-  CHECK ("weightKg" IS NULL OR "weightKg" >= 0);
+  CHECK ("weightLb" IS NULL OR "weightLb" >= 0);
+
+-- Dimensions, when given, are positive; a zero-length box is a data-entry error.
+ALTER TABLE items DROP CONSTRAINT IF EXISTS items_dimensions_positive;
+ALTER TABLE items ADD CONSTRAINT items_dimensions_positive
+  CHECK (
+    ("lengthIn" IS NULL OR "lengthIn" > 0) AND
+    ("widthIn"  IS NULL OR "widthIn"  > 0) AND
+    ("heightIn" IS NULL OR "heightIn" > 0)
+  );
 
 -- The four planning windows, all NOT NULL, all ordered.
 --
@@ -64,6 +73,7 @@ ALTER TABLE consignments ADD CONSTRAINT consignments_windows_sequential
 -- level. That is the intended state here, not an oversight.
 
 ALTER TABLE clients            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE service_levels     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE drivers            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE users              ENABLE ROW LEVEL SECURITY;
 ALTER TABLE consignments       ENABLE ROW LEVEL SECURITY;

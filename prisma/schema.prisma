@@ -34,14 +34,6 @@ enum PodLeg {
   DELIVERY
 }
 
-enum PackageType {
-  BOX
-  BOTTLE
-  ENVELOPE
-  PALLET
-  OTHER
-}
-
 enum Priority {
   NORMAL
   HIGH
@@ -86,6 +78,30 @@ model Client {
   orderCounters OrderCounter[]
 
   @@map("clients")
+}
+
+/// How an order is carried — "5 Ton Truck", "Expedite", "Non Stop - Car".
+///
+/// A table rather than an enum because the list is the business's to manage:
+/// an admin adds "North Run - Apple Express" from the console without a deploy.
+/// Orders reference the row by id, so renaming a level updates every order
+/// that used it; a retired level is deactivated (hidden from the dropdown),
+/// never deleted, so old orders keep their history.
+model ServiceLevel {
+  id   String @id @default(cuid())
+  name String @unique
+
+  active    Boolean @default(true)
+  /// Position in the dropdown. Ties fall back to name order.
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  consignments Consignment[]
+
+  @@index([active, sortOrder])
+  @@map("service_levels")
 }
 
 model Driver {
@@ -284,6 +300,10 @@ model Consignment {
   priority Priority          @default(NORMAL)
   taskType TaskType          @default(DELIVERY)
 
+  /// Restrict: a level in use cannot be deleted, only deactivated.
+  serviceLevelId String?
+  serviceLevel   ServiceLevel? @relation(fields: [serviceLevelId], references: [id], onDelete: Restrict)
+
   // --- sender (pickup) snapshot ---
   senderName         String
   senderPhone        String?
@@ -352,6 +372,7 @@ model Consignment {
   @@unique([clientId, clientReference])
   @@index([clientId, status])
   @@index([driverId, status])
+  @@index([serviceLevelId])
   @@index([status])
   @@index([createdAt])
   /// The dispatch map bounds itself by delivery deadline, not creation date.
@@ -364,11 +385,23 @@ model Item {
   consignmentId String
   consignment   Consignment @relation(fields: [consignmentId], references: [id], onDelete: Cascade)
 
-  description String
-  qty         Int          @default(1)
-  weightKg    Decimal?     @db.Decimal(10, 3)
-  packageType PackageType?
+  /// The client's own line reference (a tracking number or SKU), shown as the
+  /// "Reference" column. Kept as `barcode` in the database — it is what the
+  /// scanner reads — but it need not be scannable.
   barcode     String?
+  description String
+  qty         Int      @default(1)
+
+  /// Weight of the WHOLE line in pounds, exactly as the operator typed it — not a
+  /// per-unit figure, so an order total is a plain sum and is never multiplied by
+  /// qty. Pounds because that is what the clients' paperwork uses.
+  weightLb    Decimal? @db.Decimal(10, 3)
+
+  /// Outer dimensions in inches. Cubic is derived (L × W × H, in cubic metres)
+  /// and deliberately not stored, so it can never disagree with these three.
+  lengthIn    Decimal? @db.Decimal(8, 2)
+  widthIn     Decimal? @db.Decimal(8, 2)
+  heightIn    Decimal? @db.Decimal(8, 2)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -24,7 +24,6 @@
  *   - every order has items and a tracking history.
  */
 import { ConsignmentStatus, Priority, TaskType } from '@prisma/client';
-import type { PackageType } from '@prisma/client';
 import { prisma } from '../src/config/prisma.js';
 
 const PREFIX = 'BLD';
@@ -128,23 +127,25 @@ const AREA_CODES = ['416', '647', '905', '289', '437'];
 
 interface CatalogueItem {
   description: string;
-  packageType: PackageType;
-  weightKg: number;
+  /** Whole-line weight in pounds, as an operator would type it. */
+  weightLb: number;
+  /** Outer dimensions in inches. */
+  dims: [number, number, number];
 }
 
 const CATALOGUE: CatalogueItem[] = [
-  { description: 'Laptop, boxed', packageType: 'BOX', weightKg: 2.4 },
-  { description: 'Contract documents', packageType: 'ENVELOPE', weightKg: 0.3 },
-  { description: 'Lab reagents, chilled', packageType: 'BOTTLE', weightKg: 1.8 },
-  { description: 'Printer toner cartridges', packageType: 'BOX', weightKg: 4.2 },
-  { description: 'Retail apparel restock', packageType: 'BOX', weightKg: 7.5 },
-  { description: 'Surgical gloves, 10 cases', packageType: 'PALLET', weightKg: 38 },
-  { description: 'Event signage', packageType: 'OTHER', weightKg: 3.1 },
-  { description: 'Replacement network switch', packageType: 'BOX', weightKg: 5.6 },
-  { description: 'Pharmacy order', packageType: 'BOX', weightKg: 1.2 },
-  { description: 'Architectural drawings', packageType: 'ENVELOPE', weightKg: 0.6 },
-  { description: 'Catering supplies', packageType: 'BOX', weightKg: 9.9 },
-  { description: 'Textbooks, 2 cartons', packageType: 'BOX', weightKg: 14 },
+  { description: 'Laptop, boxed', weightLb: 5.3, dims: [16, 12, 4] },
+  { description: 'Contract documents', weightLb: 0.7, dims: [13, 10, 1] },
+  { description: 'Lab reagents, chilled', weightLb: 4.0, dims: [12, 9, 9] },
+  { description: 'Printer toner cartridges', weightLb: 9.3, dims: [18, 12, 8] },
+  { description: 'Retail apparel restock', weightLb: 16.5, dims: [24, 18, 12] },
+  { description: 'Surgical gloves, 10 cases', weightLb: 84.0, dims: [48, 40, 36] },
+  { description: 'Event signage', weightLb: 6.8, dims: [36, 24, 3] },
+  { description: 'Replacement network switch', weightLb: 12.3, dims: [22, 16, 6] },
+  { description: 'Pharmacy order', weightLb: 2.6, dims: [10, 7, 6] },
+  { description: 'Architectural drawings', weightLb: 1.3, dims: [37, 4, 4] },
+  { description: 'Catering supplies', weightLb: 21.8, dims: [24, 16, 14] },
+  { description: 'Textbooks, 2 cartons', weightLb: 30.9, dims: [18, 12, 10] },
 ];
 
 const DRIVER_CODES = ['DRV-001', 'DRV-002', 'DRV-003', 'DRV-004'];
@@ -173,6 +174,13 @@ async function main() {
     await clean();
     return;
   }
+
+  // Every active level, in dropdown order; orders cycle through them.
+  const levels = await prisma.serviceLevel.findMany({
+    where: { active: true },
+    select: { id: true },
+    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+  });
 
   const clients = await prisma.client.findMany({
     where: { active: true, code: { in: Object.keys(HUBS) } },
@@ -249,8 +257,10 @@ async function main() {
       return {
         description: c.description,
         qty: 1 + ((i + k) % 4),
-        weightKg: c.weightKg,
-        packageType: c.packageType,
+        weightLb: c.weightLb,
+        lengthIn: c.dims[0],
+        widthIn: c.dims[1],
+        heightIn: c.dims[2],
         barcode: `${code}${String(100000 + i * 7 + k)}`,
       };
     });
@@ -260,6 +270,7 @@ async function main() {
         orderNo,
         clientId: client.id,
         clientReference: `${code}-PO-${String(24000 + seq * 13)}`,
+        serviceLevelId: levels.length ? levels[i % levels.length]!.id : null,
         status,
         driverId: driver?.id ?? null,
         assignedAt: driver ? new Date(pickupAfter.getTime() - 14 * HOUR) : null,

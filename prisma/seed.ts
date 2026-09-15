@@ -1,4 +1,4 @@
-import { ConsignmentStatus, PackageType, Priority, TaskType } from '@prisma/client';
+import { ConsignmentStatus, Priority, TaskType } from '@prisma/client';
 import { prisma } from '../src/config/prisma.js';
 import { env } from '../src/config/env.js';
 import { supabase, POD_BUCKET } from '../src/config/supabase.js';
@@ -50,6 +50,23 @@ const CLIENTS = [
   { name: 'TCS', code: 'TCS' },
 ];
 
+/** The console's service-level list, in its display order. Admins edit it from there. */
+const SERVICE_LEVELS = [
+  '5 Ton Truck',
+  'Bandstra - YVR',
+  'City Transfer - YVR',
+  'Compound Delivery - BioScript',
+  'Expedite',
+  'General',
+  'Mini Van',
+  'Non Stop - Car',
+  'North Run - Apple Express',
+  'Reefer Van',
+  'Smart Courier',
+  'Sprinter Base Van',
+  'Standard - YVR',
+];
+
 const DRIVERS = [
   { name: 'Muhammad Abdullah', code: 'DRV-001', mobile: '+1 416 555 0142' },
   { name: 'Bilal Ahmed', code: 'DRV-002', mobile: '+1 647 555 0198' },
@@ -90,8 +107,7 @@ type SeedOrder = {
   items: Array<{
     description: string;
     qty: number;
-    weightKg: number;
-    packageType: PackageType;
+    weightLb: number;
     barcode?: string;
   }>;
 };
@@ -165,15 +181,13 @@ const ORDERS: Record<string, SeedOrder[]> = {
         {
           description: 'Anker PowerCore 20000mAh power bank',
           qty: 1,
-          weightKg: 0.48,
-          packageType: PackageType.BOX,
+          weightLb: 1.06,
           barcode: '8901234500011',
         },
         {
           description: 'USB-C braided cable 2m',
           qty: 2,
-          weightKg: 0.12,
-          packageType: PackageType.ENVELOPE,
+          weightLb: 0.26,
           barcode: '8901234500028',
         },
       ],
@@ -204,8 +218,7 @@ const ORDERS: Record<string, SeedOrder[]> = {
         {
           description: 'Dyson V8 replacement filter',
           qty: 1,
-          weightKg: 0.3,
-          packageType: PackageType.BOX,
+          weightLb: 0.66,
           barcode: '8901234500110',
         },
       ],
@@ -238,8 +251,7 @@ const ORDERS: Record<string, SeedOrder[]> = {
         {
           description: 'Instant Pot Duo 6qt (sealed, unopened)',
           qty: 1,
-          weightKg: 5.6,
-          packageType: PackageType.BOX,
+          weightLb: 12.35,
           barcode: '8901234500202',
         },
       ],
@@ -274,8 +286,7 @@ const ORDERS: Record<string, SeedOrder[]> = {
         {
           description: 'Retail display unit, flat-packed',
           qty: 3,
-          weightKg: 11.2,
-          packageType: PackageType.PALLET,
+          weightLb: 24.69,
           barcode: '7701122330014',
         },
       ],
@@ -306,8 +317,7 @@ const ORDERS: Record<string, SeedOrder[]> = {
         {
           description: 'Sealed document wallet',
           qty: 1,
-          weightKg: 0.35,
-          packageType: PackageType.ENVELOPE,
+          weightLb: 0.77,
           barcode: '7701122330120',
         },
       ],
@@ -338,8 +348,7 @@ const ORDERS: Record<string, SeedOrder[]> = {
         {
           description: 'Temperature-controlled sample case',
           qty: 2,
-          weightKg: 3.4,
-          packageType: PackageType.BOTTLE,
+          weightLb: 7.5,
           barcode: '7701122330217',
         },
       ],
@@ -373,8 +382,7 @@ const ORDERS: Record<string, SeedOrder[]> = {
         {
           description: 'Legal case files, banded',
           qty: 4,
-          weightKg: 2.1,
-          packageType: PackageType.BOX,
+          weightLb: 4.63,
           barcode: '6612009900018',
         },
       ],
@@ -406,8 +414,7 @@ const ORDERS: Record<string, SeedOrder[]> = {
         {
           description: 'Sealed tender envelope',
           qty: 1,
-          weightKg: 0.6,
-          packageType: PackageType.ENVELOPE,
+          weightLb: 1.32,
           barcode: '6612009900117',
         },
       ],
@@ -438,15 +445,13 @@ const ORDERS: Record<string, SeedOrder[]> = {
         {
           description: 'Lab consumables carton',
           qty: 2,
-          weightKg: 7.8,
-          packageType: PackageType.BOX,
+          weightLb: 17.2,
           barcode: '6612009900214',
         },
         {
           description: 'Calibration fluid, 1L',
           qty: 6,
-          weightKg: 1.05,
-          packageType: PackageType.BOTTLE,
+          weightLb: 2.31,
           barcode: '6612009900221',
         },
       ],
@@ -535,6 +540,7 @@ async function main() {
   await prisma.user.deleteMany();
   await prisma.driver.deleteMany();
   await prisma.client.deleteMany();
+  await prisma.serviceLevel.deleteMany();
   await wipeAuthUsers();
   console.log('✓ wiped');
 
@@ -543,6 +549,12 @@ async function main() {
     await prisma.client.create({ data: { name: c.name, code: c.code, active: true } });
   }
   console.log(`✓ clients: ${CLIENTS.length}`);
+
+  // 1a. service levels
+  await prisma.serviceLevel.createMany({
+    data: SERVICE_LEVELS.map((name, sortOrder) => ({ name, sortOrder })),
+  });
+  console.log(`✓ service levels: ${SERVICE_LEVELS.length}`);
 
   /*
    * 2. drivers — roster row first, then the login that points at it.
@@ -684,8 +696,7 @@ async function main() {
               create: order.items.map((i) => ({
                 description: i.description,
                 qty: i.qty,
-                weightKg: i.weightKg,
-                packageType: i.packageType,
+                weightLb: i.weightLb,
                 barcode: i.barcode ?? null,
               })),
             },

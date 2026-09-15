@@ -214,8 +214,10 @@ async function main() {
         consignmentId: c.id,
         description: GOODS[(i + k) % GOODS.length],
         qty: 1 + ((i + k) % 3),
-        weightKg: +(0.2 + rand(i + k, 5) * 2).toFixed(2),
-        packageType: (['BOX', 'ENVELOPE', 'BOTTLE'] as const)[(i + k) % 3],
+        weightLb: +(0.5 + rand(i + k, 5) * 4).toFixed(2),
+        lengthIn: 6 + ((i + k) % 5) * 3,
+        widthIn: 4 + ((i + k) % 4) * 2,
+        heightIn: 3 + ((i + k) % 3) * 2,
       }));
     }),
   });

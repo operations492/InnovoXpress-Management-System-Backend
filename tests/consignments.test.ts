@@ -64,8 +64,12 @@ describe('POST /api/consignments', () => {
     expect(res.body.items).toHaveLength(2);
     expect(res.body.totals.itemCount).toBe(2);
     expect(res.body.totals.totalQty).toBe(3);
-    expect(res.body.totals.totalWeightKg).toBeCloseTo(0.6, 3);
-    expect(res.body.items[0].packageType).toBe('BOX');
+    expect(res.body.totals.totalWeightLb).toBeCloseTo(1.32, 3);
+    // 10 × 7 × 5 in³ = 350 in³ ≈ 0.0057 m³; the second line has no dimensions.
+    expect(res.body.items[0].cubic).toBeCloseTo(0.0057, 4);
+    expect(res.body.items[1].cubic).toBeNull();
+    expect(res.body.totals.totalCubic).toBeCloseTo(0.0057, 4);
+    expect(res.body.items[0].barcode).toBe('LKA001450097');
   });
 
   it('opens the audit trail with a single logged event', async () => {
@@ -274,8 +278,8 @@ describe('PUT /api/consignments/:id', () => {
       .set(auth())
       .send({
         items: [
-          { id: keep.id, description: keep.description, qty: 5, weightKg: 1.5 },
-          { description: 'Newly added carton', qty: 1, weightKg: 2 },
+          { id: keep.id, description: keep.description, qty: 5, weightLb: 1.5 },
+          { description: 'Newly added carton', qty: 1, weightLb: 2 },
         ],
       });
 

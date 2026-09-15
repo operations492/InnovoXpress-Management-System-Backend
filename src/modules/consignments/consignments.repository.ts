@@ -9,6 +9,7 @@ import type { ListConsignmentsQuery } from '../../schemas/query.schema.js';
 export const fullInclude = {
   client: { select: { id: true, name: true, code: true } },
   driver: { select: { id: true, name: true, code: true, mobile: true } },
+  serviceLevel: { select: { id: true, name: true } },
   items: { orderBy: { createdAt: 'asc' } },
   proofs: true,
   trackingEvents: {
@@ -49,7 +50,8 @@ export const summarySelect = {
   createdAt: true,
   client: { select: { id: true, name: true, code: true } },
   driver: { select: { id: true, name: true } },
-  items: { select: { qty: true, weightKg: true } },
+  serviceLevel: { select: { id: true, name: true } },
+  items: { select: { qty: true, weightLb: true, lengthIn: true, widthIn: true, heightIn: true } },
 } satisfies Prisma.ConsignmentSelect;
 
 export type SummaryRow = Prisma.ConsignmentGetPayload<{
@@ -140,6 +142,13 @@ export function findClientById(id: string) {
   return prisma.client.findUnique({
     select: { id: true, name: true, code: true, active: true },
     where: { id },
+  });
+}
+
+export function findServiceLevelById(id: string) {
+  return prisma.serviceLevel.findUnique({
+    where: { id },
+    select: { id: true, name: true, active: true },
   });
 }
 

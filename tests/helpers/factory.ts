@@ -22,8 +22,8 @@ export function buildConsignment(clientId: string, overrides: Record<string, unk
     },
     generalNote: 'Handle with care',
     items: [
-      { description: 'Power bank 20000mAh', qty: 1, weightKg: 0.48, packageType: 'BOX' },
-      { description: 'USB-C cable 2m', qty: 2, weightKg: 0.12, packageType: 'ENVELOPE' },
+      { barcode: 'LKA001450097', description: 'Power bank 20000mAh', qty: 1, weightLb: 1.06, lengthIn: 10, widthIn: 7, heightIn: 5 },
+      { barcode: 'LKA001450626', description: 'USB-C cable 2m', qty: 2, weightLb: 0.26 },
     ],
     ...overrides,
   };

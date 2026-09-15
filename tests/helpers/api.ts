@@ -46,6 +46,8 @@ export interface Reference {
   driverId: string;
   /** A second driver, for ownership tests. */
   driverBId: string;
+  /** An active service level, for the consignment form's dropdown. */
+  serviceLevelId: string;
 }
 
 /**
@@ -144,6 +146,12 @@ export async function seedReference(): Promise<Reference> {
     driverId: driverB.id,
   });
 
+  const level = await prisma.serviceLevel.upsert({
+    where: { name: 'Test Expedite' },
+    update: { active: true },
+    create: { name: 'Test Expedite', sortOrder: 999, active: true },
+  });
+
   // The middleware caches profiles for 30s; a suite that just rewrote them must
   // not read the previous run's.
   forgetAllProfiles();
@@ -155,6 +163,7 @@ export async function seedReference(): Promise<Reference> {
     otherClientCode: other.code,
     driverId: driver.id,
     driverBId: driverB.id,
+    serviceLevelId: level.id,
   };
 }
 

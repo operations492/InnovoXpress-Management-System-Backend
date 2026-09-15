@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { PackageType, Priority, TaskType } from '@prisma/client';
+import { Priority, TaskType } from '@prisma/client';
 
 /**
  * Every object here is `.strict()`: unknown keys are a 400, not a silent drop.
@@ -62,11 +62,16 @@ export const itemSchema = z
   .object({
     /** Present = update this existing row; absent = create a new one. */
     id: z.string().min(1).optional(),
+    /** The client's line reference — the "Reference" column. */
+    barcode: trimmed(80).optional(),
     description: trimmed(300).min(1, 'Item description is required'),
     qty: z.coerce.number().int().min(1, 'Quantity must be at least 1').default(1),
-    weightKg: z.coerce.number().min(0).max(100_000).optional(),
-    packageType: z.enum(PackageType).optional(),
-    barcode: trimmed(80).optional(),
+    /** Weight of the whole line in pounds, as typed. Not per unit. */
+    weightLb: z.coerce.number().min(0).max(100_000).optional(),
+    /** Outer dimensions in inches. Cubic is derived from these, never sent. */
+    lengthIn: z.coerce.number().positive().max(10_000).optional(),
+    widthIn: z.coerce.number().positive().max(10_000).optional(),
+    heightIn: z.coerce.number().positive().max(10_000).optional(),
   })
   .strict();
 
@@ -74,6 +79,8 @@ export const createConsignmentSchema = z
   .object({
     clientId: z.string().min(1, 'Client is required'),
     clientReference: trimmed(64).optional(),
+    /** A row in service_levels. Validated to exist and be active. */
+    serviceLevelId: z.string().min(1).optional(),
 
     taskType: z.enum(TaskType).default(TaskType.DELIVERY),
     priority: z.enum(Priority).default(Priority.NORMAL),
@@ -118,6 +125,8 @@ export const updateConsignmentSchema = z
     /** Optional: move the order to another client. Validated against the clients table. */
     clientId: z.string().min(1).optional(),
     clientReference: trimmed(64).nullable().optional(),
+    /** Optional; null clears it. */
+    serviceLevelId: z.string().min(1).nullable().optional(),
     taskType: z.enum(TaskType).optional(),
     priority: z.enum(Priority).optional(),
     sender: senderSchema.optional(),
