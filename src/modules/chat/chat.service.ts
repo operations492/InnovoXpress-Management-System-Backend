@@ -1,4 +1,5 @@
 import { AppError } from '../../utils/httpError.js';
+import { sendPush } from '../../utils/push.js';
 import * as repo from './chat.repository.js';
 import * as storage from './chat.storage.js';
 import type {
@@ -385,6 +386,68 @@ export async function listMessages(conversationId: string, query: ListMessagesQu
   };
 }
 
+/**
+ * Buzz the phones of everyone in the thread who is not the sender.
+ *
+ * Realtime broadcast is the delivery mechanism for a client that is CONNECTED;
+ * this is the one for a phone in a pocket, which is where a driver's phone
+ * spends most of a shift. The two are not redundant — a socket that is not open
+ * receives nothing, and there is no replay.
+ *
+ * Fire-and-forget, never awaited, and `sendPush` swallows its own failures: the
+ * message is already stored and already broadcast by the time this runs, so a
+ * push failure must not turn a delivered message into a 500 for the sender.
+ *
+ * Preview text is deliberately included. A notification reading "New message"
+ * makes the driver open the app to find out whether it mattered, which is the
+ * opposite of what a notification is for — and this is internal dispatch
+ * traffic, on a work phone, not personal correspondence.
+ */
+async function notifyMessage(params: {
+  conversationId: string;
+  senderId: string;
+  body: string;
+  attachmentName?: string | null;
+}) {
+  const recipients = await repo.findPushRecipients(params.conversationId, params.senderId);
+  if (recipients.length === 0) return;
+
+  const [conversation, senders] = await Promise.all([
+    repo.findConversationById(params.conversationId),
+    // Drivers allowed: a driver replying to dispatch is the common direction,
+    // and excluding them here would leave their messages titled "Someone".
+    repo.findEligibleParticipants([params.senderId], true),
+  ]);
+
+  const senderName = senders[0]?.name ?? 'Dispatch';
+
+  // A file with no caption still has to say something. The name is more use
+  // than "sent an attachment" — it tells the driver whether to stop and look.
+  const preview =
+    params.body.trim() ||
+    (params.attachmentName ? `📎 ${params.attachmentName}` : 'Sent an attachment');
+
+  // In a DIRECT thread the sender IS the thread, so putting the name in the
+  // title and the words in the body reads the way every messaging app does. A
+  // space needs both, because the name alone does not say where it was said.
+  const isSpace = conversation?.type === 'SPACE' && conversation.name;
+
+  await sendPush(
+    recipients
+      .map((r) => r.user.pushToken)
+      .filter((t): t is string => Boolean(t))
+      .map((to) => ({
+        to,
+        title: isSpace ? conversation.name! : senderName,
+        body: isSpace ? `${senderName}: ${preview}` : preview,
+        data: { kind: 'chat-message', conversationId: params.conversationId },
+      })),
+    // Its own channel, so a driver who mutes chatter does not thereby mute
+    // new work — the two arrive through different channels by design.
+    'messages',
+  );
+}
+
 export async function sendMessage(
   viewerId: string,
   conversationId: string,
@@ -396,6 +459,12 @@ export async function sendMessage(
     body: input.body,
     clientMessageId: input.clientMessageId,
   });
+
+  // Only on a genuine create. An idempotent replay — a phone retrying after a
+  // lost response — must not buzz the room a second time.
+  if (created) {
+    void notifyMessage({ conversationId, senderId: viewerId, body: input.body });
+  }
 
   return { message: toMessageDto(row), created };
 }
@@ -428,6 +497,14 @@ export async function sendAttachment(
     // An idempotent replay keeps the ORIGINAL message and its original file;
     // the copy we just uploaded is an orphan.
     if (!created) await storage.removeAttachment(stored.path);
+    else {
+      void notifyMessage({
+        conversationId,
+        senderId: viewerId,
+        body: input.body ?? '',
+        attachmentName: stored.name,
+      });
+    }
 
     return { message: toMessageDto(row), created };
   } catch (error) {
