@@ -44,10 +44,52 @@ const slug = (name: string) =>
     .replace(/[^a-z]+/g, '.')
     .replace(/^\.|\.$/g, '');
 
+// Each client carries a default pickup address: the console copies it into a
+// consignment's sender snapshot when an operator picks the client, so the three
+// seeded clients are enough to try the prefill without typing an address first.
 const CLIENTS = [
-  { name: 'Daraz', code: 'DRZ' },
-  { name: 'Apple Express', code: 'APX' },
-  { name: 'TCS', code: 'TCS' },
+  {
+    name: 'Daraz',
+    code: 'DRZ',
+    contactName: 'Warehouse Desk',
+    phone: '+1 905 555 0142',
+    email: 'dispatch@daraz.example.ca',
+    line1: '6750 Century Avenue',
+    city: 'Mississauga',
+    province: 'ON',
+    postcode: 'L5N 2V8',
+    lat: 43.589,
+    lng: -79.7,
+    instructions: 'Loading dock 4, ring the bell before 07:00.',
+  },
+  {
+    name: 'Apple Express',
+    code: 'APX',
+    contactName: 'Shipping Office',
+    phone: '+1 905 555 0177',
+    email: 'shipping@appleexpress.example.ca',
+    line1: '5875 Explorer Drive',
+    city: 'Mississauga',
+    province: 'ON',
+    postcode: 'L4W 5K2',
+    lat: 43.6446,
+    lng: -79.6244,
+    instructions: null,
+  },
+  {
+    name: 'TCS',
+    code: 'TCS',
+    contactName: 'Front Counter',
+    phone: '+1 416 555 0119',
+    email: 'counter@tcs.example.ca',
+    line1: '1 Yonge Street',
+    city: 'Toronto',
+    province: 'ON',
+    postcode: 'M5E 1E5',
+    lat: 43.6426,
+    lng: -79.3757,
+    instructions: 'Street-level counter; no dock.',
+  },
 ];
 
 /** The console's service-level list, in its display order. Admins edit it from there. */
@@ -546,7 +588,7 @@ async function main() {
 
   // 1. clients
   for (const c of CLIENTS) {
-    await prisma.client.create({ data: { name: c.name, code: c.code, active: true } });
+    await prisma.client.create({ data: { ...c, active: true } });
   }
   console.log(`✓ clients: ${CLIENTS.length}`);
 

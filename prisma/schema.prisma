@@ -74,6 +74,29 @@ model Client {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // --- default pickup address ---
+  // Copied into a consignment's sender snapshot when an operator picks this
+  // client. Nullable throughout: the existing rows predate these columns, and a
+  // client can be logged before anyone knows where it collects from. An address
+  // counts as usable only with line1 + city + coordinates, because a half-filled
+  // one prefills an order that cannot be routed or mapped.
+  contactName String?
+  phone       String?
+  email       String?
+  line1       String?
+  city        String?
+  /// Two-letter province/territory code ("ON", "BC") — the same closed set the
+  /// consignment snapshot uses, offered as a Select.
+  province    String?
+  /// Canada Post format, stored canonically as "A1A 1A1" (upper, single space).
+  postcode    String?
+  /// Set by the console's TomTom picker. Both or neither: the service refuses
+  /// one without the other, since routing needs the pair.
+  lat Float?
+  lng Float?
+  /// "Use loading dock 4, ring first." Becomes senderInstructions.
+  instructions String?
+
   consignments  Consignment[]
   orderCounters OrderCounter[]
 
