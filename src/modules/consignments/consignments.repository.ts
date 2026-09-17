@@ -306,3 +306,21 @@ export function findOrderNumbers(ids: string[]) {
     select: { id: true, orderNo: true },
   });
 }
+
+/**
+ * Where to reach the person who drives for this roster entry.
+ *
+ * Lives here rather than being imported from the auth repository so the service
+ * keeps talking to one repository, the way every other module does.
+ *
+ * Null is an ordinary answer, not an error: a driver may have no login yet, may
+ * never have opened the app, or may have been deactivated. Assignment must
+ * succeed in all three cases — the notification is the optional part.
+ */
+export async function findDriverPushToken(driverId: string): Promise<string | null> {
+  const user = await prisma.user.findUnique({
+    where: { driverId },
+    select: { pushToken: true, active: true },
+  });
+  return user?.active ? user.pushToken : null;
+}
