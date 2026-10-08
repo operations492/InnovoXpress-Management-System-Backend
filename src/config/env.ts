@@ -37,6 +37,10 @@ const envSchema = z.object({
   /** Seconds a generated proof link stays valid. */
   POD_SIGNED_URL_TTL: z.coerce.number().int().positive().default(300),
 
+  AVATAR_STORAGE_BUCKET: z.string().min(1).default('avatars'),
+  AVATAR_MAX_BYTES: z.coerce.number().int().positive().default(5_242_880),
+  AVATAR_SIGNED_URL_TTL: z.coerce.number().int().positive().default(3600),
+
   PORT: z.coerce.number().default(4000),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 
