@@ -26,8 +26,32 @@ export const recordLocationsSchema = z
   .object({ pings: z.array(pingSchema).min(1).max(200) })
   .strict();
 
+/**
+ * A driver's own work list.
+ *
+ * `scope` splits the list along the line that actually matters — whether the
+ * slice is bounded. A driver's live run is a handful of jobs and is fetched
+ * whole; their delivered history grows for as long as they work here, so it is
+ * the only part that is ever paged.
+ *
+ * `includeDelivered` is kept for the older clients that still send it, and is
+ * read only when `scope` is absent. The two never combine: `scope` is the newer,
+ * more precise question, so it wins outright rather than being intersected with
+ * a flag that means something slightly different.
+ *
+ * `page`/`pageSize` are optional everywhere. Omit them and the response is
+ * exactly what it has always been — a bare `{ data }` with no envelope — so
+ * adding paging here breaks nothing that already works.
+ */
 export const myConsignmentsQuerySchema = z
-  .object({ includeDelivered: z.enum(['true', 'false']).default('false') })
+  .object({
+    includeDelivered: z.enum(['true', 'false']).default('false'),
+    scope: z.enum(['live', 'delivered']).optional(),
+    page: z.coerce.number().int().positive().optional(),
+    // Capped: this is a phone on a mobile uplink, and an unbounded pageSize
+    // would hand back the very thing paging exists to avoid.
+    pageSize: z.coerce.number().int().positive().max(100).optional(),
+  })
   .strict();
 
 /**

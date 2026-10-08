@@ -24,3 +24,17 @@ export const POD_BUCKET = env.SUPABASE_STORAGE_BUCKET;
  * accepts anything, so mixing them would weaken evidence handling.
  */
 export const CHAT_BUCKET = env.CHAT_STORAGE_BUCKET;
+
+/**
+ * Profile photos. Private, like everything else here.
+ *
+ * A face is personal data even when the person is an employee, and object paths
+ * in this codebase are deterministic — so a public bucket would mean anyone who
+ * guessed a user id could fetch that driver's photo. Reads go through a signed
+ * URL the API mints, exactly as proof-of-delivery images do.
+ *
+ * Its own bucket rather than a folder in `pod`: that bucket is evidence, with a
+ * retention story and a seed script that empties it, and a profile photo is
+ * neither.
+ */
+export const AVATAR_BUCKET = env.AVATAR_STORAGE_BUCKET;

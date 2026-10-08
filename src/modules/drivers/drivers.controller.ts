@@ -33,8 +33,20 @@ export const setShift = asyncHandler(async (req, res) => {
 /* ------------------------------------------------------------ driver work list */
 
 export const myConsignments = asyncHandler(async (req, res) => {
-  const q = getValidatedQuery<{ includeDelivered: string }>(req);
+  const q = getValidatedQuery<{
+    includeDelivered: string;
+    scope?: 'live' | 'delivered';
+    page?: number;
+    pageSize?: number;
+  }>(req);
   res
     .status(200)
-    .json(await workService.myConsignments(driverIdOf(req), q.includeDelivered === 'true'));
+    .json(
+      await workService.myConsignments(driverIdOf(req), {
+        scope: q.scope,
+        includeDelivered: q.includeDelivered === 'true',
+        page: q.page,
+        pageSize: q.pageSize,
+      }),
+    );
 });

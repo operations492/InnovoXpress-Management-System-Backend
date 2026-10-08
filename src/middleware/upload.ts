@@ -30,3 +30,23 @@ export const uploadPodFiles = multer({
 ]);
 
 export type UploadedFiles = Record<string, Express.Multer.File[] | undefined>;
+
+/**
+ * One profile photo, on the `photo` field.
+ *
+ * `.single()` rather than `.fields()` because there is exactly one file and no
+ * text alongside it — `fields: 0` makes that explicit, so a client trying to
+ * smuggle extra form data gets rejected by multer rather than silently ignored.
+ *
+ * The same caveat applies as above: this filter trusts the declared
+ * Content-Type, which is client-supplied. The service sniffs the actual bytes
+ * before anything is stored.
+ */
+export const uploadAvatarFile = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 1, fields: 0, fileSize: env.AVATAR_MAX_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (/^image\/(jpeg|png|webp)$/.test(file.mimetype)) return cb(null, true);
+    cb(null, false);
+  },
+}).single('photo');
