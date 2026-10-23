@@ -48,9 +48,9 @@ describe('POST /api/consignments', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.sender.city).toBe('Lahore');
-    expect(res.body.sender.area).toBe('Raiwind Road');
+    expect(res.body.sender.province).toBe('ON');
     expect(res.body.receiver.city).toBe('Lahore');
-    expect(res.body.receiver.area).toBe('DHA Phase 5');
+    expect(res.body.receiver.province).toBe('ON');
     expect(res.body.receiver.postcode).toBe('54792');
   });
 
@@ -161,7 +161,7 @@ describe('GET /api/consignments', () => {
             name: 'Imran Qureshi',
             phone: '+92 333 2298871',
             line1: 'Flat 703, Ocean Tower',
-            area: 'Clifton',
+            province: 'ON',
             city: 'Karachi',
           },
         }),

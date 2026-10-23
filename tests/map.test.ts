@@ -42,7 +42,7 @@ function withCoords(over: Record<string, unknown> = {}) {
     sender: {
       name: 'Daraz Fulfilment Centre',
       line1: 'Warehouse 4',
-      area: 'Raiwind Road',
+      province: 'ON',
       city: 'Lahore',
       postcode: '54000',
       lat: 31.52,
@@ -51,7 +51,7 @@ function withCoords(over: Record<string, unknown> = {}) {
     receiver: {
       name: 'Sana Yousaf',
       line1: 'House 214, Street 8',
-      area: 'DHA Phase 5',
+      province: 'ON',
       city: 'Lahore',
       postcode: '54792',
       lat: 31.47,

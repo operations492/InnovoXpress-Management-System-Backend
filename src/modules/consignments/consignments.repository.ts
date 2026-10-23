@@ -12,6 +12,7 @@ export const fullInclude = {
   serviceLevel: { select: { id: true, name: true } },
   items: { orderBy: { createdAt: 'asc' } },
   proofs: true,
+  documents: { select: { kind: true } },
   trackingEvents: {
     orderBy: { recordedAt: 'desc' },
     include: { driver: { select: { id: true, name: true } } },
@@ -47,6 +48,7 @@ export const summarySelect = {
   deliverAfter: true,
   deliverBefore: true,
   generalNote: true,
+  documents: { select: { kind: true } },
   createdAt: true,
   client: { select: { id: true, name: true, code: true } },
   driver: { select: { id: true, name: true } },
@@ -65,21 +67,24 @@ export function findFullById(id: string): Promise<FullConsignment | null> {
 /**
  * A date arriving as `2026-08-13` parses to midnight, which would exclude the
  * whole day it names. Treat a midnight boundary as "end of that day".
+ *
+ * UTC getters, not local ones: `z.coerce.date('2026-08-13')` produces midnight
+ * UTC, so on a server that is not itself on UTC the local hour is 05:00 or 19:00,
+ * the midnight test never fired, and a date-only bound silently excluded the
+ * entire day it was meant to include. An explicit time is still honoured exactly
+ * as given — only a bare date is widened.
  */
-function inclusiveEnd(d: Date): Date 
-{
-  
+function inclusiveEnd(d: Date): Date {
   const isMidnight =
-    d.getHours() === 0 &&
-    d.getMinutes() === 0 &&
-    d.getSeconds() === 0 &&
-    d.getMilliseconds() === 0;
+    d.getUTCHours() === 0 &&
+    d.getUTCMinutes() === 0 &&
+    d.getUTCSeconds() === 0 &&
+    d.getUTCMilliseconds() === 0;
   if (!isMidnight) return d;
+
   const end = new Date(d);
-  end.setHours(23, 59, 59, 999);
+  end.setUTCHours(23, 59, 59, 999);
   return end;
-
-
 }  
 
 export function buildWhere(q: ListConsignmentsQuery): Prisma.ConsignmentWhereInput {
@@ -101,6 +106,10 @@ export function buildWhere(q: ListConsignmentsQuery): Prisma.ConsignmentWhereInp
     if (!q.status) where.status = { in: [...tabStatuses] };
     else if (!tabStatuses.includes(q.status)) where.status = { in: [] };
   }
+
+  if (q.taskType) where.taskType = q.taskType;
+
+  if (q.deliverBy) where.deliverBefore = { lte: inclusiveEnd(q.deliverBy) };
 
   if (q.from || q.to) {
     where.createdAt = {

@@ -94,7 +94,7 @@ describe('who gets offered', () => {
     expect(mine.ranked).toBe(true);
     expect(mine.distanceM).toBeGreaterThan(0);
     // Whichever engine answered, it must say which.
-    expect(['osrm', 'straight-line']).toContain(res.body.meta.source);
+    expect(['engine', 'straight-line']).toContain(res.body.meta.source);
   });
 
   it('leaves out a driver who is off shift, because assignment would refuse them', async () => {

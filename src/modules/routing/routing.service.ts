@@ -1,7 +1,7 @@
 import { AppError } from '../../utils/httpError.js';
 import { haversineMetres, plottable, type LatLng } from '../../utils/geo.js';
 import type { DriverRouteQuery, NearestDriversQuery } from '../../schemas/routing.schema.js';
-import * as osrm from './routing.osrm.js';
+import * as engine from './routing.google.js';
 import * as repo from './routing.repository.js';
 
 /**
@@ -24,7 +24,7 @@ import * as repo from './routing.repository.js';
  */
 
 /** What sorting on `durationS` means when OSRM could not answer. */
-export type RankSource = 'osrm' | 'straight-line' | 'none';
+export type RankSource = 'engine' | 'straight-line' | 'none';
 
 export interface RankedDriver {
   driverId: string;
@@ -91,8 +91,8 @@ export async function driverRoute(consignmentId: string, q: DriverRouteQuery) {
       city: order.senderCity,
     },
     orderNo: order.orderNo,
-    /** Static road profiles, never live traffic — as everywhere else here. */
-    trafficAware: false,
+    /** Whether the numbers below account for live traffic. Follows the engine. */
+    trafficAware: engine.TRAFFIC_AWARE,
   };
 
   const unavailable = (reason: NoRouteReason, warning: string) => ({
@@ -117,9 +117,9 @@ export async function driverRoute(consignmentId: string, q: DriverRouteQuery) {
     Math.round((Date.now() - driver.position.recordedAt.getTime()) / 1000),
   );
 
-  let route: Awaited<ReturnType<typeof osrm.routeTo>>;
+  let route: Awaited<ReturnType<typeof engine.routeTo>>;
   try {
-    route = await osrm.routeTo(from, pickup);
+    route = await engine.routeTo(from, pickup);
   } catch (err) {
     console.warn('[routing] OSRM unavailable for driver route:', err);
     return unavailable('engine-unavailable', 'Routing engine unavailable — no route to draw');
@@ -170,15 +170,15 @@ export async function nearestDrivers(consignmentId: string, q: NearestDriversQue
   const located = candidates.filter((c) => plottable(c.lat, c.lng));
   const unlocated = candidates.filter((c) => !plottable(c.lat, c.lng));
 
-  let legs: (osrm.Leg | null)[] = [];
+  let legs: (engine.Leg | null)[] = [];
   let source: RankSource = 'none';
   let warning: string | null = null;
 
   if (located.length > 0) {
     const origins: LatLng[] = located.map((c) => ({ lat: c.lat as number, lng: c.lng as number }));
     try {
-      legs = await osrm.matrixTo(origins, pickup);
-      source = 'osrm';
+      legs = await engine.matrixTo(origins, pickup);
+      source = 'engine';
     } catch (err) {
       /*
        * OSRM being down must not break assignment. Fall back to straight-line so
@@ -214,7 +214,7 @@ export async function nearestDrivers(consignmentId: string, q: NearestDriversQue
       staleSeconds: staleness(c.recordedAt),
       // In the straight-line fallback duration is meaningless, so it stays null
       // rather than being faked from an assumed speed.
-      durationS: source === 'osrm' ? (leg?.durationS ?? null) : null,
+      durationS: source === 'engine' ? (leg?.durationS ?? null) : null,
       distanceM: leg?.distanceM ?? null,
       ranked: leg !== null,
     };
@@ -229,7 +229,7 @@ export async function nearestDrivers(consignmentId: string, q: NearestDriversQue
    * the list never reshuffles arbitrarily between polls.
    */
   const measure = (d: RankedDriver) =>
-    source === 'osrm' ? d.durationS : d.distanceM;
+    source === 'engine' ? d.durationS : d.distanceM;
 
   rankedRows.sort((a, b) => {
     if (a.ranked !== b.ranked) return a.ranked ? -1 : 1;
@@ -284,10 +284,11 @@ export async function nearestDrivers(consignmentId: string, q: NearestDriversQue
       unlocatedCount: unlocated.length,
       totalCandidates: candidates.length,
       /**
-       * OSRM durations come from OpenStreetMap speed profiles, never live traffic.
-       * The ordering is trustworthy; the clock is optimistic at peak hours.
+       * Google Routes prices live traffic into `durationS` when the engine is
+       * configured for it, so the clock is as honest as the ordering. In the
+       * straight-line fallback neither is true, and `source` says so.
        */
-      trafficAware: false,
+      trafficAware: engine.TRAFFIC_AWARE,
     },
   };
 }

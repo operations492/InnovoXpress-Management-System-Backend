@@ -4,10 +4,14 @@ import { requireDriver, requireMinRole } from '../../middleware/rbac.js';
 import { validate } from '../../middleware/validate.js';
 import { driversQuerySchema } from '../../schemas/assignment.schema.js';
 import {
+  createDriverSchema,
+  driverDocKindParamSchema,
+  driverIdParamSchema,
   latestLocationsQuerySchema,
   myConsignmentsQuerySchema,
   recordLocationsSchema,
   trailQuerySchema,
+  updateDriverSchema,
 } from '../../schemas/driver.schema.js';
 import { shiftSchema } from '../../schemas/user.schema.js';
 import { consignmentIdParamSchema } from '../../schemas/consignment.schema.js';
@@ -15,6 +19,7 @@ import * as controller from './drivers.controller.js';
 // Tracking is its own module; the routes live here because the URLs sit under
 // /api/drivers and moving them would break callers for no gain.
 import * as locations from '../locations/locations.controller.js';
+import { uploadDriverDoc } from '../../middleware/upload.js';
 
 const router = Router();
 
@@ -69,6 +74,43 @@ router.get(
   validate(consignmentIdParamSchema, 'params'),
   validate(trailQuerySchema, 'query'),
   locations.trail,
+);
+
+// The Drivers tab owns the roster. Reads are operator+, writes are admin.
+router.get('/:id', requireMinRole('operator'), validate(driverIdParamSchema, 'params'), controller.get);
+
+router.post('/', requireMinRole('admin'), validate(createDriverSchema), controller.create);
+
+router.patch(
+  '/:id',
+  requireMinRole('admin'),
+  validate(driverIdParamSchema, 'params'),
+  validate(updateDriverSchema),
+  controller.update,
+);
+
+// Moved from /api/users/drivers/:id, which still works and calls the same code.
+router.delete(
+  '/:id',
+  requireMinRole('admin'),
+  validate(driverIdParamSchema, 'params'),
+  controller.remove,
+);
+
+// Photo + ID card. Both links in one read; uploads are admin-only.
+router.get(
+  '/:id/documents',
+  requireMinRole('operator'),
+  validate(driverIdParamSchema, 'params'),
+  controller.documents,
+);
+
+router.post(
+  '/:id/documents/:kind',
+  requireMinRole('admin'),
+  validate(driverDocKindParamSchema, 'params'),
+  uploadDriverDoc,
+  controller.putDocument,
 );
 
 export default router;
