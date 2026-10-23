@@ -42,10 +42,13 @@ Everything below is real and shipped. Nothing here is a plan.
 | Assignment | Assign, swap, unassign, bulk assign with partial success; off-shift drivers refused |
 | Lifecycle | Eight states, forward only; the two "goods changed hands" states reachable only by uploading proof |
 | Proof of delivery | Photo + signature per leg, magic-byte checked, in private Supabase Storage, idempotent retries, admin replace |
-| Drivers | Roster with live load, clock on/off with shift window, nightly auto clock-off at the last GPS ping |
+| Release letter | Optional document per order (PDF or image), uploaded by operators, readable by the assigned driver on a signed link |
+| POD coordinates | Every proof keeps the driver's live position and its device fix time, snapshotted at capture — the phone sends nothing new |
+| Printing | 4x6 labels, one per piece with its own Code 128; a two-up A4 docket, each copy barcoded; and a POD report gated on `DELIVERED`. Three separate PDFs, rebuilt per request |
+| Drivers | Own tab: roster CRUD, live load, clock on/off with shift window, nightly auto clock-off at the last GPS ping, photo + ID card |
 | GPS | Batched pings; live position table + significant-movement history; 7-day retention |
 | Dispatch map | One `/pins` call feeding map + sidebar + counts; driver roster with colours; Realtime invalidations |
-| Routing | Nearest drivers by drive time (OSRM, straight-line fallback), road line driver → pickup |
+| Routing | Nearest drivers by drive time (Google Routes, straight-line fallback), road line driver → pickup |
 | Planned routes | One active plan per driver; sequence stored, line regenerated; reorder with optimistic locking; optimise preview |
 | Chat | Direct messages and spaces, attachments, keyset paging, read markers, per-user Realtime inbox, rate limit |
 | Users | Admin-only accounts on Supabase Auth; driver accounts linked to roster rows |
@@ -56,8 +59,9 @@ Everything below is real and shipped. Nothing here is a plan.
 Not built, on purpose: no `CANCELLED` or `FAILED` status, no order delete, no money or pricing columns,
 no server-side geocoding, no push notifications. The frontend's finance pages run on in-memory fixtures.
 
-There is also a **print spike**, `scripts/pdfSpike.ts`, that renders a label + proof-of-delivery sheet
-for one order with `pdfkit` and `bwip-js`. It is a script, not an endpoint.
+Printing grew out of a spike and is now real: `src/modules/documents/` serves
+`GET /api/consignments/:id/label.pdf` and `.../docket.pdf` with `pdfkit` and `bwip-js`. The original
+`scripts/pdfSpike.ts` survives only because it writes straight to a file with no server running.
 
 ---
 
@@ -68,15 +72,24 @@ for one order with `pdfkit` and `bwip-js`. It is a script, not an endpoint.
 `prisma.config.ts` and `src/config/env.ts`) · Zod 4 · `jose` for token verification · `multer` for
 uploads · `@supabase/supabase-js` for Storage and the Auth admin API · Vitest + Supertest.
 
-**Supabase is used as four things**: Postgres, Storage (two private buckets, `pod` and
+**Supabase is used as four things**: Postgres, Storage (four private buckets, `pod`, `driver-docs`,
+`order-docs` and
 `chat-attachments`), Auth (issues every token; this API only verifies), and Realtime (broadcast from
 database triggers). It is **not** used as PostgREST and **not** used for row-level authorization of
 application data — that lives in Express.
 
-**OSRM** is a self-hosted routing engine at `OSRM_URL` (default `http://localhost:5000`). It must serve an
-extract that covers the Greater Toronto Area. When it is unreachable every routing feature **degrades and
-says so** rather than failing, except creating a planned route, which returns 503 because there is no
-honest order to save.
+**Google Routes** is the routing engine, reached with `GOOGLE_ROUTES_API_KEY`. It replaced self-hosted
+OSRM, so there is no local server and no map extract to maintain — and, unlike OSRM, it is **traffic
+aware**, which is why `meta.trafficAware` is now true. When it is unreachable, throttled, or the day's
+`GOOGLE_ROUTES_DAILY_BUDGET` is spent, every routing feature **degrades and says so** rather than
+failing, except creating a planned route, which returns 503 because there is no honest order to save.
+
+**It is metered, and that changes two things.** Every call is billed, and billed again per field
+requested via `X-Goog-FieldMask` — so `routing.google.ts` asks for the narrowest field set per question,
+caches answers behind a TTL (geometry for an hour, the driver matrix for a minute), shares in-flight
+duplicate requests, and refuses to spend past a daily call budget. It also moves at most
+`GOOGLE_ROUTES_MAX_WAYPOINTS` (**25**) intermediate stops where OSRM managed 100, so a planned route now
+caps at 25 drops rather than 95.
 
 **No migrations directory.** Schema changes are `npm run db:push` (Prisma) followed by
 `npm run db:constraints`, which applies the hand-written SQL in `prisma/sql/` in a fixed order. See §7.
@@ -160,9 +173,9 @@ routes → controller → service → repository → Prisma
   rule; repositories hold every query.
 
 **Modules** (`src/modules/`): `auth · chat · clients · consignments · drivers · locations · map · pod · reference
-· routes · routing · serviceLevels · users`.
+· documents · routes · routing · serviceLevels · users`.
 
-- **`routing`** owns the OSRM client (`routing.osrm.ts`) and nothing else talks to OSRM directly except
+- **`routing`** owns the Google Routes client (`routing.google.ts`) and nothing else talks to the provider except
   `routes`, which imports that client. Its two endpoints live under `/api/consignments/:id/...` because the
   question is about an order.
 - **`routes`** owns planned runs at `/api/routes`.
@@ -170,8 +183,10 @@ routes → controller → service → repository → Prisma
 - **`locations`** has no routes file; its handlers are mounted by `drivers.routes.ts`.
 
 Cross-module imports that exist and are tolerated: `locations.service → drivers.repository`,
-`routes.service → routing.osrm`, `users.service → map.service` (for `nextColorIndex`),
-`consignments.repository` has its own `findDriverById`. Do not add more.
+`routes.service → routing.google`, `users.service → map.service` (for `nextColorIndex`),
+`documents.service → pod.storage` (the POD report embeds proof files; a second Supabase download
+helper aimed at the same bucket would be worse), `consignments.repository` has its own
+`findDriverById`. Do not add more.
 
 **Request pipeline** (`src/app.ts`): CORS allowlist from `CORS_ORIGINS` (open in test) → JSON body limit
 1 MB → `GET /health` (runs `SELECT 1`) → the nine routers → `notFound` → `errorHandler`. Every error leaves
@@ -207,7 +222,7 @@ logged.
   driver moved at least `HISTORY_MIN_MOVE_M` (15 m) from the last kept point. Answering both questions
   from one table made liveness depend on movement: a parked courier vanished from the map.
 - **A planned route is a plan.** It records an intended visiting order and gates nothing. The
-  **sequence is stored; the line never is** — geometry comes from OSRM on every read. **The computer
+  **sequence is stored; the line never is** — geometry comes from the engine on every read, now behind a TTL cache because the engine is metered. **The computer
   suggests, the operator decides**: optimise is a preview until the operator saves the order.
 - **Realtime is an invalidation, never data.** `dispatch:tasks` carries `{ id, op }` only. Realtime caches
   channel authorization for the life of a socket, so nothing worth stealing may ever ride a shared topic.
@@ -237,6 +252,11 @@ logged.
   map.sql → positions.sql → routes.sql`. `constraints.sql` revokes across the whole schema, and
   `positions.sql` calls `is_ops_user()` which `map.sql` creates. The `db:chat`, `db:map`, `db:positions`
   and `db:routes` npm scripts all run the same applier.
+- **The POD GPS columns were applied by hand**, not by `db:push`. `proofs_of_delivery` gained
+  `podLat`, `podLng`, `podAccuracyM` (all `double precision`) and `podFixAt` (`timestamp`), all
+  nullable, via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` — because the drift below makes
+  `db:push` want to drop columns. Re-running `db:push` on a clean schema is still the right way;
+  this was the way that touched nothing else.
 - **Schema drift you will see:** the live database has a `users.pushToken` column that `schema.prisma`
   does not declare. `prisma db push` warns it would drop it. Do not pass `--accept-data-loss` to make the
   warning go away; either add the column to the schema or leave it.
@@ -251,10 +271,12 @@ logged.
   `postgres`, which bypasses RLS. The only policies are three SELECT policies on `realtime.messages`
   (chat inbox, dispatch tasks, dispatch drivers). Linter notices about "RLS enabled, no policy" are the
   intended state.
-- **Both storage buckets must stay private.** POD object paths are deterministic and guessable; chat
-  paths are random. Reads go through short-lived signed URLs minted by the API.
+- **All four storage buckets must stay private.** POD object paths are deterministic and guessable; chat
+  and driver-document paths are random. Reads go through short-lived signed URLs minted by the API.
 - **Never trust `Content-Type` on uploads** — magic bytes decide (`utils/imageSniff.ts`): PNG, JPEG, WebP.
-- **OSRM speaks `lon,lat`; Leaflet wants `lat,lng`.** The flip happens once, in `routing.osrm.ts`.
+- **GeoJSON output is `lon,lat`; Leaflet wants `lat,lng`.** The flip happens once, in
+  `routing.google.ts`. The client asks Google for `GEO_JSON_LINESTRING` rather than its default encoded
+  polyline precisely so this stays the same one-line flip that OSRM needed, with no decoder to trust.
   Swapping coordinates does not error; it routes you into the ocean and returns plausible numbers.
 - **`weightLb` and the three dimensions are Prisma `Decimal`.** They serialise as strings from raw
   selects and numbers from the mapped DTOs. Coerce.

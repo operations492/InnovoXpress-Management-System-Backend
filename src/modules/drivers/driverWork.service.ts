@@ -28,7 +28,21 @@ const NEXT_ACTION: Record<ConsignmentStatus, string> = {
 };
 
 function withNextAction(row: DriverConsignmentRow) {
-  return { ...row, nextAction: NEXT_ACTION[row.status] ?? 'NONE' };
+  /*
+   * Only the KINDS leave the API, never a storage path - the driver fetches the
+   * files through /api/consignments/:id/documents, which mints signed links and
+   * filters to the stop they are standing at.
+   *
+   * `hasReleaseLetter` is kept because the deployed app reads it; `documentKinds`
+   * is what a new build should use, since there are two kinds now.
+   */
+  const { documents, ...rest } = row;
+  return {
+    ...rest,
+    hasReleaseLetter: documents.some((d) => d.kind === 'RELEASE_LETTER'),
+    documentKinds: documents.map((d) => d.kind),
+    nextAction: NEXT_ACTION[row.status] ?? 'NONE',
+  };
 }
 
 /**

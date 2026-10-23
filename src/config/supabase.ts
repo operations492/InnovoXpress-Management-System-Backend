@@ -24,3 +24,11 @@ export const POD_BUCKET = env.SUPABASE_STORAGE_BUCKET;
  * accepts anything, so mixing them would weaken evidence handling.
  */
 export const CHAT_BUCKET = env.CHAT_STORAGE_BUCKET;
+
+export const DRIVER_DOCS_BUCKET = env.DRIVER_DOCS_BUCKET;
+
+/**
+ * Release letters. Private like the rest, and separate from `pod` because this
+ * bucket accepts PDFs while POD accepts only images.
+ */
+export const ORDER_DOCS_BUCKET = env.ORDER_DOCS_BUCKET;

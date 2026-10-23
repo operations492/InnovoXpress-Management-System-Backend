@@ -1,7 +1,7 @@
 import { AppError } from '../../utils/httpError.js';
 import { haversineMetres, plottable, type LatLng } from '../../utils/geo.js';
 import type { CreateRouteInput, ReorderRouteInput } from '../../schemas/route.schema.js';
-import * as osrm from '../routing/routing.osrm.js';
+import * as engine from '../routing/routing.google.js';
 import * as repo from './routes.repository.js';
 
 /**
@@ -106,10 +106,10 @@ async function present(route: repo.RouteRow) {
       : []),
   ];
 
-  let line: osrm.RoadRoute | null = null;
+  let line: engine.RoadRoute | null = null;
   let geometryError: string | null = null;
   try {
-    line = await osrm.routeThrough(waypoints);
+    line = await engine.routeThrough(waypoints);
   } catch (err) {
     console.warn('[routes] OSRM unavailable while drawing a route:', err);
     geometryError = 'Routing engine unavailable — the order is shown without its line';
@@ -136,8 +136,8 @@ async function present(route: repo.RouteRow) {
     geometryError,
     /** Stops that changed underneath the plan. A flag for a human, never an action. */
     needsReview: stops.some((s) => s.issues.length > 0),
-    /** Static road profiles, never live traffic. */
-    trafficAware: false,
+    /** Whether these totals account for live traffic. Follows the engine. */
+    trafficAware: engine.TRAFFIC_AWARE,
   };
 }
 
@@ -219,9 +219,9 @@ export async function createRoute(input: CreateRouteInput, actorId: string) {
     ...(input.end ? [{ lat: input.end.lat, lng: input.end.lng }] : []),
   ];
 
-  let plan: osrm.TripPlan | null;
+  let plan: engine.TripPlan | null;
   try {
-    plan = await osrm.optimiseTrip(points, { fixedEnd: !!input.end });
+    plan = await engine.optimiseTrip(points, { fixedEnd: !!input.end });
   } catch (err) {
     console.warn('[routes] OSRM unavailable while optimising:', err);
     throw unavailable(
@@ -258,7 +258,19 @@ export async function createRoute(input: CreateRouteInput, actorId: string) {
     })),
   });
 
-  return present((await repo.findById(routeId))!);
+  const created = await present((await repo.findById(routeId))!);
+  /*
+   * Store what the route really costs, not what the optimiser quoted.
+   *
+   * The optimiser's own totals are the cost of ITS tour, which for a route with
+   * no stated end is a closed loop including a drive home nobody makes. The line
+   * just drawn through the saved order is the honest figure, so it replaces them
+   * - the same thing `reorder` does after a drag.
+   */
+  if (created.distanceM !== null && created.durationS !== null) {
+    await repo.setPlannedTotals(routeId, created.distanceM, created.durationS);
+  }
+  return created;
 }
 
 /* ------------------------------------------------------------------ */
@@ -331,9 +343,9 @@ export async function optimisePreview(routeId: string) {
       : []),
   ];
 
-  let plan: osrm.TripPlan | null;
+  let plan: engine.TripPlan | null;
   try {
-    plan = await osrm.optimiseTrip(points, { fixedEnd: route.endLat !== null });
+    plan = await engine.optimiseTrip(points, { fixedEnd: route.endLat !== null });
   } catch (err) {
     console.warn('[routes] OSRM unavailable while previewing an optimisation:', err);
     throw unavailable('The routing engine is unavailable right now');

@@ -39,3 +39,19 @@ export function sniffImage(buf: Buffer): SniffedImage | null {
 
   return null;
 }
+
+export type SniffedPdf = { mime: 'application/pdf'; ext: 'pdf' };
+
+/**
+ * Identify a PDF from its magic bytes.
+ *
+ * Deliberately NOT folded into `sniffImage`: that function's image-only answer is
+ * what enforces POD's evidence rule, and widening it would quietly let a PDF be
+ * stored as a signature. Callers that accept documents ask for both.
+ */
+export function sniffPdf(buf: Buffer): SniffedPdf | null {
+  // %PDF-
+  if (buf.length < 5) return null;
+  if (buf.toString('ascii', 0, 5) === '%PDF-') return { mime: 'application/pdf', ext: 'pdf' };
+  return null;
+}

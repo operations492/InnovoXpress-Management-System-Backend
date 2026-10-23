@@ -79,10 +79,10 @@ routes → controller → service → repository → Prisma
 **Modules** (`src/modules/`): `auth · chat · clients · consignments · drivers · locations · map · pod · reference
 · routes · routing · serviceLevels · users`. `locations` has no routes file; `drivers.routes.ts` mounts
 its handlers. `pod` is mounted under `/api/consignments/:id/pod` with `mergeParams`. `routing` owns the
-OSRM client (`routing.osrm.ts`); `routes` imports that client for geometry.
+Google Routes client (`routing.google.ts`); `routes` imports that client for geometry.
 
 Tolerated cross-module imports (do not add more): `locations.service → drivers.repository`,
-`routes.service → routing.osrm`, `users.service → map.service` (`nextColorIndex`),
+`routes.service → routing.google`, `users.service → map.service` (`nextColorIndex`),
 `consignments.repository` has its own `findDriverById`.
 
 **Request pipeline** (`src/app.ts`, in order):
@@ -252,6 +252,12 @@ gets 403 on every request because it has no profile.
 | POST | `/assign-bulk` | operator+ | assign many, partial success |
 | GET | `/:id/nearest-drivers` | operator+ | §4.9 |
 | GET | `/:id/driver-route` | operator+ | §4.9 |
+| GET | `/:id/release-letter` | operator, or the assigned driver | §4.14 |
+| POST | `/:id/release-letter` | operator+ | §4.14 |
+| DELETE | `/:id/release-letter` | operator+ | §4.14 |
+| GET | `/:id/label.pdf` | operator+ | §4.15 |
+| GET | `/:id/docket.pdf` | operator+ | §4.15 |
+| GET | `/:id/pod-report.pdf` | operator+ | §4.15 — 409 unless `DELIVERED` |
 | * | `/:id/pod/...` | see §4.6 | proof of delivery |
 
 **Create body** (`createConsignmentSchema`):
@@ -500,7 +506,7 @@ deactivated drivers are dropped unless they still hold open work.
 least-used-first at driver creation (`map.service.nextColorIndex`), never unique; drivers created before
 the column fall back to a hash of the id. Colour is never the only encoding.
 
-### 4.9 Routing — under `/consignments/:id` (operator+, needs OSRM)
+### 4.9 Routing — under `/consignments/:id` (operator+, needs the routing engine)
 
 **`GET /:id/nearest-drivers?withinMinutes=&includeUnlocated=&limit=`** — ranks assignable drivers by
 drive time to the order's **pickup** (sender) coordinate.
@@ -508,9 +514,9 @@ drive time to the order's **pickup** (sender) coordinate.
 - Candidates: active **and** on-shift drivers (`LEFT JOIN driver_positions`, so a clocked-on driver whose
   phone has not reported is still a candidate; they come back with `ranked: false` and sort last when
   `includeUnlocated=true`, the default). `withinMinutes` 1–1440, default 3. `limit` 1–100, default 50.
-- One OSRM `/table` call ranks all located drivers. If OSRM is unreachable the service falls back to
+- One Google Routes matrix call ranks all located drivers. If the engine is unreachable the service falls back to
   straight-line haversine distance, leaves `durationS` null (a faked speed would lie), and says so:
-  `meta.source` is `osrm` | `straight-line` | `none`, with a `warning` string when degraded.
+  `meta.source` is `engine` | `straight-line` | `none`, with a `warning` string when degraded.
 - Sort: ranked first, then `durationS` (or `distanceM` when degraded), then lower `activeLoad`, then
   name (so the list never reshuffles arbitrarily between polls).
 - Per driver: `{ driverId, name, code, mobile, colorIndex, activeLoad, lat, lng, recordedAt, accuracyM,
@@ -522,13 +528,36 @@ drive time to the order's **pickup** (sender) coordinate.
 Otherwise `{ available: false, reason: 'no-position' | 'no-road-route' | 'engine-unavailable', warning }`.
 The position is deliberately not windowed by recency; `staleSeconds` reports its age instead.
 
-**The OSRM client** (`routing.osrm.ts`): profile `driving`; `AbortSignal.timeout(OSRM_TIMEOUT_MS)`
-(4 s); `routeTo`, `matrixTo`, `routeThrough`, `optimiseTrip`. `/table` and `/trip` cap at **100
-coordinates** (`TRIP_MAX_POINTS`); `/route` has no cap (126 waypoints ≈ 300 ms). "No road" answers
-(`NoRoute`, `NoSegment`) return `null`; everything else throws `OsrmUnavailableError`. **OSRM speaks
-`lon,lat`; the flip to `[lat, lng]` happens here, once.** OSRM is not traffic-aware: durations come from
-OpenStreetMap speed profiles, so trust the ordering and treat the clock as optimistic. The extract must
-cover the Greater Toronto Area.
+**The Google Routes client** (`routing.google.ts`): `computeRoutes` and `computeRouteMatrix`, travel
+mode `DRIVE`, `AbortSignal.timeout(GOOGLE_ROUTES_TIMEOUT_MS)` (5 s); same four functions as the OSRM
+client it replaced — `routeTo`, `matrixTo`, `routeThrough`, `optimiseTrip` — and the same contract, so
+the two services calling it did not change. "No road" answers return `null`; everything else throws
+`RoutingUnavailableError`. **GeoJSON is `lon,lat`; the flip to `[lat, lng]` happens here, once** — the
+client requests `GEO_JSON_LINESTRING` so there is no encoded polyline to decode. It **is** traffic aware
+(`GOOGLE_ROUTES_TRAFFIC`, default `TRAFFIC_AWARE`), so the clock is as trustworthy as the ordering.
+
+Three things exist only because the engine is now metered:
+
+- **Field masks.** `X-Goog-FieldMask` decides the price as well as the payload, so each call names the
+  narrowest set that answers it — the matrix asks for no geometry, and `optimiseTrip` asks for no
+  geometry and no live traffic, since ordering needs neither and both cost more.
+- **A TTL cache and in-flight coalescing.** Geometry was regenerated on every read when that was free;
+  identical requests now answer from memory for `GOOGLE_ROUTES_CACHE_TTL_MS` (1 h) and the driver matrix
+  for `GOOGLE_MATRIX_CACHE_TTL_MS` (1 min), and concurrent duplicates share one request.
+- **A daily budget.** `GOOGLE_ROUTES_DAILY_BUDGET` (2500) is a circuit breaker, not a billing
+  guarantee: past it the engine reads as unavailable and everything degrades the way it already does for
+  an outage. A runaway loop against a metered API produces a bill rather than an error, and a bill is
+  the one failure nobody notices until the month ends.
+
+`optimiseTrip` is the one place Google is not a drop-in: `optimizeWaypointOrder` only moves
+intermediates and always needs a destination, so a route with no stated end is sent as a closed tour
+from the start and the drive home is ignored. Pinning whichever stop the operator happened to select
+last would be worse. The cap is `GOOGLE_ROUTES_MAX_WAYPOINTS` (**25**), against OSRM's 100.
+
+Because that tour is closed, its **distance and duration include the return leg** — measured at 17.2 km
+against the real 10.4 km on a four-stop Toronto run. So `optimiseTrip` reports zero totals when the end
+is open, and `createRoute` now writes `plannedDistanceM`/`plannedDurationS` from the line actually drawn
+through the saved order, the same way `reorder` does. The stored total is never the optimiser's quote.
 
 ### 4.10 Planned routes — `/routes` (operator+)
 
@@ -537,22 +566,22 @@ It gates nothing; deleting it changes no consignment.
 
 | Method | Path | Body | Behaviour |
 |---|---|---|---|
-| POST | `/` | `{ driverId, consignmentIds (2–95), start: { lat, lng, label? }, end?: { lat, lng, label? }, clientKey? }` | Validates driver active and on shift (409), every order exists (400), is assigned to that driver (409), not delivered (409), has receiver coordinates (400), start/end plottable (400). Asks OSRM `/trip` for the order (**503 if OSRM is down — there is no honest order to save**). Supersedes the driver's previous ACTIVE route in the same transaction. `clientKey` makes a double-tap return the first route |
-| GET | `/driver/:driverId` | | **200 with `{ route: null }`** when there is none; otherwise the route below with geometry regenerated from OSRM |
+| POST | `/` | `{ driverId, consignmentIds (2–25), start: { lat, lng, label? }, end?: { lat, lng, label? }, clientKey? }` | Validates driver active and on shift (409), every order exists (400), is assigned to that driver (409), not delivered (409), has receiver coordinates (400), start/end plottable (400). Asks Google Routes for the order (**503 if the engine is down — there is no honest order to save**). Supersedes the driver's previous ACTIVE route in the same transaction. `clientKey` makes a double-tap return the first route |
+| GET | `/driver/:driverId` | | **200 with `{ route: null }`** when there is none; otherwise the route below with geometry regenerated from the engine (TTL-cached) |
 | DELETE | `/driver/:driverId` | | supersedes the active route (404 if none); assignments survive |
 | PATCH | `/:id/sequence` | `{ consignmentIds, version }` | `consignmentIds` must be an **exact permutation** of the current stops (400 otherwise). `version` mismatch → 409 (another dispatcher edited it). Sets `sequenceSource: MANUAL`, bumps `version`, recomputes planned totals. Uses a DEFERRABLE unique on `(routeId, seq)` so the shuffle can pass through duplicates |
-| POST | `/:id/optimise` | | **preview only, saves nothing**: `{ consignmentIds, version, unchanged, current: { distanceM, durationS }, proposed: {…}, saves: {…} }`. 503 if OSRM is down, 409 if no tour is possible |
+| POST | `/:id/optimise` | | **preview only, saves nothing**: `{ consignmentIds, version, unchanged, current: { distanceM, durationS }, proposed: {…}, saves: {…} }`. 503 if the engine is down, 409 if no tour is possible |
 
 Route DTO: `{ id, driver, status: 'ACTIVE' | 'SUPERSEDED', version, start, end, sequenceSource:
 'OPTIMISED' | 'MANUAL', stops: [{ seq, consignmentId, orderNo, status, plannedLat, plannedLng, issues[] }],
 points: [[lat, lng], …], distanceM, durationS, geometryError, needsReview, trafficAware: false }`.
-`points` is empty with `geometryError: true` when OSRM is unreachable on read.
+`points` is empty with `geometryError: true` when the engine is unreachable on read.
 
 **Stop issues** are derived on every read, never stored: `delivered` (status DELIVERED), `reassigned`
 (order now on another driver), `unassigned` (no driver), `address-moved` (receiver coordinate differs
 from the planned snapshot by more than 50 m). Any issue sets `needsReview`.
 
-Two rules carry the design: **the sequence is stored and the line never is** (geometry from OSRM on every
+Two rules carry the design: **the sequence is stored and the line never is** (geometry from the engine on every
 read, so nothing can go stale), and **the computer suggests, the operator decides** (`/trip` picks an
 order only when asked; the read draws whatever is saved and reports its honest cost even when worse).
 
@@ -638,6 +667,133 @@ returns `address: null` until the row is complete enough to prefill an order and
 
 `GET /api/reference` carries the same `address` on each client, so the consignment form prefills the
 sender without a second request.
+
+### 4.13 Drivers — roster writes and documents
+
+The Drivers tab owns the roster. Reads are operator+, writes are admin.
+
+| Method | Path | Who | Body | Notes |
+|---|---|---|---|---|
+| GET | `/api/drivers/:id` | operator+ | | one driver with live load, linked login and signed document links |
+| POST | `/api/drivers` | admin | `{ name, code?, mobile?, email? }` | 201; claims a `mapColorIndex` least-used-first; duplicate `code` is a 409 |
+| PATCH | `/api/drivers/:id` | admin | `{ name?, code?, mobile?, email?, active? }` | deactivating closes an open shift and stamps `shiftEndedAt` |
+| DELETE | `/api/drivers/:id` | admin | | **409 once they have any consignment or proof.** Moved from `/api/users/drivers/:id`, which still works and calls the same function |
+| GET | `/api/drivers/:id/documents` | operator+ | | `{ driverId, photoUrl, idCardUrl }`, both signed, null when absent |
+| POST | `/api/drivers/:id/documents/:kind` | admin | multipart, field `file` | `kind` is `photo` or `id-card`; PNG/JPEG/WebP by magic bytes |
+
+Documents live in a third private bucket, `driver-docs`. Unlike POD, **object paths carry a random
+segment**: POD paths are deterministic so a retry overwrites its own stale object, whereas a driver
+document is replaced rarely and the previous object is deleted explicitly once the new path is
+committed — so a failed swap leaves the old document intact. Storage is written before the column,
+never the reverse.
+
+Both rosters — `GET /api/drivers` and `GET /api/map/drivers` — now carry a signed `photoUrl`, which
+is what puts the driver’s own face on a map waypoint popup instead of a generic avatar. One signed
+link per driver is cheap at this scale; if the roster ever grows, move the photo to its own lookup.
+
+`GET /api/users/unlinked-drivers` stays in `users` — it is about linking logins, not the roster.
+
+### 4.14 Release letter — `/consignments/:id/release-letter`
+
+Paperwork a driver shows to have a shipment handed over: an airline release letter at a cargo desk, a
+warehouse authority note. **Optional, at most one per order**, and nothing in the lifecycle depends on
+it — an order without one behaves exactly as it always did.
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| GET | `/:id/release-letter` | operator, or the assigned driver | `{ consignmentId, hasReleaseLetter, releaseLetterUrl }` |
+| POST | `/:id/release-letter` | operator+ | multipart, field `file`; replaces whatever was there |
+| DELETE | `/:id/release-letter` | operator+ | clears it; a no-op 200 when there is none |
+
+The GET is the only one of the three a driver may call, through `allowOperatorOrAssignedDriver` —
+showing the letter on the phone is the whole point of the feature, so the guard is ownership, not role.
+Uploading and clearing are operator+, the same bar as editing the order the letter belongs to.
+`releaseLetterUrl` is a short-lived signed link minted on read and **never stored**; it is `null` when
+no letter has been uploaded, which is the normal case.
+
+**PDFs are accepted here and nowhere else.** A release letter is usually a scanned or emailed PDF, so
+`sniffPdf` was added *alongside* `sniffImage` rather than folded into it: `sniffImage`'s image-only
+answer is what enforces POD's evidence rule, and widening it would let a PDF be stored as a signature.
+Accepted: PDF, PNG, JPEG, WebP — by magic bytes, up to `ORDER_DOCS_MAX_BYTES`.
+
+Files live in a **fourth private bucket, `order-docs`**, at
+`{consignmentId}/release-letter-{uuid}.{ext}` (`consignments.storage.ts`, a near-copy of
+`utils/driverDocs.ts` kept inside the module because only consignments need it). As with driver
+documents the path carries a random segment and the write order is **storage → column → delete the old
+object**, so a failed swap leaves the previous letter intact. Only `releaseLetterPath` is stored: the
+extension is where the mime type comes from, so there is no name and no mime column.
+
+`hasReleaseLetter` — a boolean, never the path — rides along on the detail DTO, the grid rows and a
+driver's own job list, so the console can badge a row and the phone can show a button without a second
+request.
+
+---
+
+### 4.15 Printed documents — `label.pdf`, `docket.pdf`, `pod-report.pdf`
+
+| Method | Path | Who | Notes |
+|---|---|---|---|
+| GET | `/:id/label.pdf` | operator+ | one 4x6 label per piece, `inline` PDF |
+| GET | `/:id/docket.pdf` | operator+ | one A4 sheet, receiver's copy over sender's, each barcoded |
+| GET | `/:id/pod-report.pdf` | operator+ | the proof report; **409 unless the order is `DELIVERED`** |
+
+**Three documents, never one combined PDF.** Labels go on a thermal roll and the docket on office
+paper — usually different printers — so a combined file would be split by hand every single time.
+The POD report is separate for a different reason: it does not exist until the job is finished.
+
+The module is `src/modules/documents/`: `documents.render.ts` holds the drawing and touches no
+database (a row, a barcode buffer and any images in, a PDF out, which is what makes the layout
+testable), `documents.brand.ts` holds the palette, the wordmark and the shared formatters, and
+`documents.service.ts` loads the row, fetches the proof images and streams the result. All three
+URLs live under `/api/consignments/:id` because the document is about an order, the same reasoning
+as `routing`.
+
+**The POD report** is one A4 sheet with a ~255pt block per stop — consignment identity, driver,
+arrival and completion times, who signed, how many pieces they signed for, the coordinate and its
+fix time, the wait in minutes, and the signature image — then the photographs, three blocks to a
+page. Both legs must be proved to reach `DELIVERED`, and `@@unique([consignmentId, leg])` caps a
+consignment at two proofs, which is why one sheet always fits.
+
+Three deliberate differences from the reference sheet it reproduces:
+
+- **each stop block names its leg** (`Stop: Collection` / `Delivery`); the reference prints two
+  blocks that are identical down to the word "Delivered", so a reader cannot tell them apart;
+- **the coordinate prints as numbers, not a map thumbnail.** The reference embeds a static-map
+  raster per stop *and* per photo — eleven billed images for a picture of six decimals we already
+  have. The accuracy rides along, because a 480m fix and a 12m fix are different claims;
+- **`DGS` prints blank**, not the reference's "No". There is no dangerous-goods column, and on a
+  safety field an invented answer is worse than an obvious gap.
+
+**pdfkit embeds PNG and JPEG only, while the POD sniffer also accepts WebP**, so a perfectly valid
+proof photo can be undrawable. `documents.service.ts` checks the stored mime before downloading and
+the renderer draws a framed, captioned gap — `photoPath` and `signaturePath` are not nullable, so
+the file always exists and is always viewable in the console; it simply cannot be embedded. The
+block is still printed. Dropping it would quietly shorten the evidence and nobody reading the
+report would know a photograph had been taken.
+
+**Labels: one per unit of quantity**, summed across item lines — an order with items of qty 1 and
+qty 2 prints three labels, numbered `1 / 3` … `3 / 3`. Each carries its own Code 128 of
+`{orderNo}-{NNN}`, so a scan identifies the carton and not just the consignment. An order with no
+items still gets one label, because something has to go on the box. Capped at 100 pages.
+
+**Both are rebuilt on every request and sent `Cache-Control: no-store`** — a reprint after an edit
+has to show the edit. `Content-Disposition` is `inline`, so the console opens the PDF in a tab and
+the operator gets the browser's own print dialog rather than a download.
+
+Fields with no column behind them — Dangerous Goods, the receiver reference — **print as labelled
+blanks**, which is what the reference paperwork does too: an empty labelled slot tells the reader the
+field exists, where omitting it silently claims the question was never asked. `Cubic` is the API's
+own derivation (L×W×H in ÷ 61,023.744, **not** multiplied by quantity), so the sheet can never
+disagree with the screen.
+
+The barcode is 150pt wide rather than the reference's 78pt so it still scans at 4in, and the receiver
+line wraps instead of running off the label edge. Those are the two places the reference sheet is
+wrong and this is deliberately not bug-compatible with it.
+
+`scripts/pdfSpike.ts` is the spike this grew out of and is now redundant; it is kept only because it
+renders straight to a file without a server.
+
+---
 
 ## 5. Data model
 
@@ -767,8 +923,15 @@ network call, and a pre-flight read rejects a wrong status before the upload sta
 | `LOCATION_RETENTION_DAYS` | `7` | reported in the trail response; the cron job hard-codes 7 |
 | `POSITION_LIVE_SECONDS` | `120` | how recent a ping must be to count as live |
 | `HISTORY_MIN_MOVE_M` | `15` | metres a driver must move before a ping is kept as history |
-| `OSRM_URL` | `http://localhost:5000` | self-hosted routing engine |
-| `OSRM_TIMEOUT_MS` | `4000` | short on purpose: a stale ranking is worth less than one that appears |
+| `GOOGLE_ROUTES_API_KEY` | `''` (empty) | Google Routes key. Empty means every routing feature degrades instead of the app refusing to boot |
+| `GOOGLE_ROUTES_TIMEOUT_MS` | `5000` | short on purpose: a stale ranking is worth less than one that appears |
+| `GOOGLE_ROUTES_TRAFFIC` | `TRAFFIC_AWARE` | `TRAFFIC_UNAWARE` is cheapest, `TRAFFIC_AWARE_OPTIMAL` costs materially more for a marginal gain |
+| `GOOGLE_ROUTES_CACHE_TTL_MS` | `3600000` | how long a drawn line may be reused. The engine is metered and this is the most frequent call |
+| `GOOGLE_MATRIX_CACHE_TTL_MS` | `60000` | much shorter: drivers move |
+| `GOOGLE_ROUTES_DAILY_BUDGET` | `2500` | hard stop on calls per day; past it the engine reads as unavailable |
+| `GOOGLE_ROUTES_MAX_WAYPOINTS` | `25` | Google moves at most this many intermediate stops. OSRM managed 100 |
+| `DRIVER_DOCS_BUCKET` / `DRIVER_DOCS_MAX_BYTES` / `DRIVER_DOCS_SIGNED_URL_TTL` | `driver-docs` / `10485760` / `3600` | driver photo + ID card. The TTL must outlast the console roster poll, or faces blank out between refetches |
+| `ORDER_DOCS_BUCKET` / `ORDER_DOCS_MAX_BYTES` / `ORDER_DOCS_SIGNED_URL_TTL` | `order-docs` / `10485760` / `3600` | release letters. The TTL is long on purpose: a driver opens one at a cargo desk on one bar of signal, and a link that expires mid-handover is worse than useless |
 | `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` / `SEED_ADMIN_NAME` | `operations@innovoxpress.com` / `ChangeMe!123` / `Operations` | the admin the seed creates |
 | `PORT` | `4000` | |
 | `NODE_ENV` | `development` | `test` opens CORS |
@@ -791,8 +954,9 @@ There is **no JWT secret** and no `ALLOW_DRIVER_SELF_SELECT`. `.env.example` is 
 | `prisma:migrate`, `prisma:deploy` | present but unused — the project does not keep migrations |
 
 Runtime dependencies: `@prisma/adapter-pg`, `@prisma/client`, `@supabase/supabase-js`, `bwip-js`,
-`cors`, `dotenv`, `express`, `jose`, `multer`, `pdfkit`, `pg`, `zod`. `pdfkit` and `bwip-js` exist only
-for `scripts/pdfSpike.ts` (a label + POD sheet renderer for one order; not an endpoint).
+`cors`, `dotenv`, `express`, `jose`, `multer`, `pdfkit`, `pg`, `zod`. `pdfkit` and `bwip-js` render the
+printed documents in `src/modules/documents/` (§4.15), and also back the older
+`scripts/pdfSpike.ts`.
 
 **Known schema drift**: the live database has a `users.pushToken` column that `schema.prisma` does not
 declare. `prisma db push` warns it would drop it. Do not accept data loss to silence the warning.
@@ -820,12 +984,12 @@ src/
   types/auth.ts             AuthUser (req.user), SupabaseClaims
   utils/orderNo.ts          atomic order-number allocation
   utils/imageSniff.ts       PNG/JPEG/WebP by magic bytes
-  utils/geo.ts              haversineMetres, plottable (fallback only; OSRM for anything an operator acts on)
+  utils/geo.ts              haversineMetres, plottable (fallback only; the engine for anything an operator acts on)
   utils/pagination.ts       paginate, buildPageMeta { total, page, pageSize, totalPages }
   utils/httpError.ts        AppError factories; utils/asyncHandler.ts
   schemas/*.schema.ts       every request shape (all .strict())
   modules/<name>/           routes · controller · service · repository (+ chat.guard, chat.rateLimit,
-                            chat.storage, chat.upload, pod.storage, routing.osrm, driverWork.service)
+                            chat.storage, chat.upload, pod.storage, routing.google, driverWork.service)
 prisma/
   schema.prisma             16 models, 10 enums, documented inline
   sql/constraints.sql       CHECKs, RLS lockdown, REVOKEs, two pg_cron jobs
@@ -837,7 +1001,7 @@ prisma/
   seed.ts                   destructive rebuild
   seedGta.ts                +200 unassigned Mississauga deliveries (GTA-), --clean
   seedBuildings.ts          +72 orders at 58 real GTA buildings (BLD-), --clean
-scripts/pdfSpike.ts         label + POD sheet PDF for one order (spike)
+scripts/pdfSpike.ts         label + POD sheet PDF for one order (spike; superseded by §4.15)
 tests/                      18 Vitest files; helpers/api.ts, factory.ts, files.ts
 ```
 
@@ -845,8 +1009,9 @@ tests/                      18 Vitest files; helpers/api.ts, factory.ts, files.t
 
 ## 9. Running it from a fresh clone
 
-Prerequisites: Node 22+, a Supabase project (or the team's), optionally a local OSRM serving an Ontario
-extract.
+Prerequisites: Node 22+, a Supabase project (or the team's), and optionally a `GOOGLE_ROUTES_API_KEY` —
+without one every routing feature degrades and says so, which is a usable state for everything except
+creating a planned route.
 
 1. `cd backend && npm install` (runs `prisma generate`).
 2. Create `.env` from the table in §7. Copy both connection strings from Supabase → Connect → ORMs →
@@ -855,8 +1020,9 @@ extract.
 3. In Supabase, switch JWT signing to **ES256** (Settings → JWT Keys). Verify with
    `curl $SUPABASE_URL/auth/v1/.well-known/jwks.json` — an empty `keys` array means still HS256, and
    every request will be a 401.
-4. Create two **private** Storage buckets: `pod` (10 MB, image/jpeg, image/png, image/webp) and
-   `chat-attachments` (5 MB, any type).
+4. Create four **private** Storage buckets: `pod` (10 MB, image/jpeg, image/png, image/webp),
+   `chat-attachments` (5 MB, any type), `driver-docs` (10 MB, image/jpeg, image/png, image/webp) and
+   `order-docs` (10 MB, application/pdf, image/jpeg, image/png, image/webp).
 5. On your **own** project only: `npm run db:push`, then `npm run db:constraints` (**do not skip it** —
    it enables RLS; without it PostgREST publishes every table), then `npm run seed`. On the team
    project all three are already done; skip them.
@@ -888,7 +1054,7 @@ delivered orders with no proof.
 
 ## 11. Tests
 
-18 Vitest files under `tests/`, run serially against one database (`vitest.config.ts`,
+21 Vitest files under `tests/`, run serially against one database (`vitest.config.ts`,
 `fileParallelism: false`). Counted by `it(` blocks on disk:
 
 | File | Cases | Covers |
@@ -903,9 +1069,11 @@ delivered orders with no proof.
 | `drivers` | 22 | roster, my consignments + nextAction, shift rules, ownership 403s |
 | `locations` | 22 | ping batching, live vs history, windows, trail |
 | `map` · `mapRealtime` | 18 · 12 | pins, counts, filters; who may join `dispatch:*` topics |
-| `nearestDrivers` · `driverRoute` | 15 · 14 | written to pass **with or without OSRM**; degraded behaviour asserted |
+| `nearestDrivers` · `driverRoute` | 15 · 14 | written to pass **with or without a routing key**; degraded behaviour asserted |
 | `routes` | 32 | create, one-active, reorder as permutation, version conflicts, optimise as preview |
 | `chat` · `chatAttachments` · `chatRealtime` · `chatRls` | 36 · 18 · 10 · 8 | rules, uploads, broadcasts, topic policies |
+| `releaseLetter` | 11 | upload/replace/clear, PDF accepted and POD still image-only, driver reads only its own |
+| `documents` | 6 | label page count = pieces, docket is one sheet, `%PDF-` magic, no-store, operator-only |
 | `auth` | 8 | token and profile handling |
 
 Run them rather than trusting the numbers. `tests/helpers/api.ts` creates real Supabase logins at
@@ -937,7 +1105,7 @@ credentials for the user's and break every later Storage upload.
 | Delete a driver with any consignment or proof | 409 |
 | Delete a service level in use | 409 |
 | Demote or deactivate yourself, or the last active admin | 400 |
-| Create a planned route while OSRM is down | 503 |
+| Create a planned route while the routing engine is down | 503 |
 | Reorder a route with a stale `version` | 409 |
 | Reorder with a stop added or missing | 400 |
 | Driver opens a chat conversation | 403 |

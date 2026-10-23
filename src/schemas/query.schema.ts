@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ConsignmentStatus } from '@prisma/client';
+import { ConsignmentStatus, TaskType } from '@prisma/client';
 import { MAP_TABS } from '../constants/mapTabs.js';
 
 export const listConsignmentsQuerySchema = z
@@ -9,12 +9,20 @@ export const listConsignmentsQuerySchema = z
     clientId: z.string().min(1).optional(),
     driverId: z.string().min(1).optional(),
     unassigned: z.enum(['true', 'false']).optional(),
+    taskType: z.enum(TaskType).optional(),
 
     /** Dispatch map sidebar grouping — an enum over MAP_TABS so the two cannot drift. */
     tab: z.enum(MAP_TABS).optional(),
 
     from: z.coerce.date().optional(),
     to: z.coerce.date().optional(),
+
+    /**
+     * Delivery deadline on or before this date. Separate from `from`/`to`, which
+     * bound `createdAt` — "logged last week" and "due by Friday" are different
+     * questions and an operator asks the second one far more often.
+     */
+    deliverBy: z.coerce.date().optional(),
 
     /** Free text across order no, client ref, sender/receiver name and city. */
     q: z.string().trim().min(1).max(120).optional(),
