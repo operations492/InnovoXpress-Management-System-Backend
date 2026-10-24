@@ -53,6 +53,7 @@ const rosterSelect = {
   active: true,
   onShift: true,
   mapColorIndex: true,
+  photoPath: true,
 } satisfies Prisma.DriverSelect;
 
 export type PinRow = Prisma.ConsignmentGetPayload<{ select: typeof pinSelect }>;

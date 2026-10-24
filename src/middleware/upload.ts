@@ -50,3 +50,51 @@ export const uploadAvatarFile = multer({
     cb(null, false);
   },
 }).single('photo');
+
+/**
+ * One driver document per request, field name `file`.
+ *
+ * The Content-Type filter is a cheap early reject only — it is client-supplied.
+ * The service sniffs the real bytes with `sniffImage` before anything is stored,
+ * exactly as POD does.
+ */
+export const uploadDriverDoc = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 1, fields: 0, fileSize: env.DRIVER_DOCS_MAX_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (/^image\/(jpeg|png|webp)$/.test(file.mimetype)) return cb(null, true);
+    cb(null, false);
+  },
+}).single('file');
+
+/**
+ * One release letter per request, field name `file`.
+ *
+ * PDFs are allowed here and nowhere else — a release letter is normally a scanned
+ * or emailed PDF, while POD must stay image-only. As everywhere, the declared
+ * Content-Type is a cheap early reject; the service sniffs the real bytes.
+ */
+/**
+ * One document signature per request, field name `signature`.
+ *
+ * PNG or JPEG only — NOT WebP, unlike POD. These are embedded into the signed
+ * PDF copy and `pdf-lib` embeds neither WebP nor anything else, so accepting one
+ * would mean storing a signature that could never appear on its own document.
+ */
+export const uploadDocSignature = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 1, fields: 0, fileSize: env.POD_MAX_SIGNATURE_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (/^image\/(jpeg|png)$/.test(file.mimetype)) return cb(null, true);
+    cb(null, false);
+  },
+}).single('signature');
+
+export const uploadOrderDoc = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 1, fields: 0, fileSize: env.ORDER_DOCS_MAX_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (/^(image\/(jpeg|png|webp)|application\/pdf)$/.test(file.mimetype)) return cb(null, true);
+    cb(null, false);
+  },
+}).single('file');

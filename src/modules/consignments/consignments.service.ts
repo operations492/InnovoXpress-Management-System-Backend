@@ -145,6 +145,7 @@ function toSummary(row: repo.SummaryRow) {
     deliverAfter: row.deliverAfter,
     deliverBefore: row.deliverBefore,
     generalNote: row.generalNote,
+    hasReleaseLetter: row.documents.some((d) => d.kind === 'RELEASE_LETTER'),
     createdAt: row.createdAt,
     ...totalsOf(row.items),
   };
@@ -194,6 +195,7 @@ function toDetail(c: repo.FullConsignment) {
     pickedUpAt: c.pickedUpAt,
     deliveredAt: c.deliveredAt,
     generalNote: c.generalNote,
+    hasReleaseLetter: c.documents.some((d) => d.kind === 'RELEASE_LETTER'),
     items: c.items.map((i) => ({
       id: i.id,
       barcode: i.barcode,

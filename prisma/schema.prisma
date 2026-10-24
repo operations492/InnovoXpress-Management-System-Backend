@@ -74,8 +74,33 @@ model Client {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // --- default pickup address ---
+  // Copied into a consignment's sender snapshot when an operator picks this
+  // client. Nullable throughout: the existing rows predate these columns, and a
+  // client can be logged before anyone knows where it collects from. An address
+  // counts as usable only with line1 + city + coordinates, because a half-filled
+  // one prefills an order that cannot be routed or mapped.
+  contactName  String?
+  phone        String?
+  email        String?
+  line1        String?
+  city         String?
+  /// Two-letter province/territory code ("ON", "BC") — the same closed set the
+  /// consignment snapshot uses, offered as a Select.
+  province     String?
+  /// Canada Post format, stored canonically as "A1A 1A1" (upper, single space).
+  postcode     String?
+  /// Set by the console's TomTom picker. Both or neither: the service refuses
+  /// one without the other, since routing needs the pair.
+  lat          Float?
+  lng          Float?
+  /// "Use loading dock 4, ring first." Becomes senderInstructions.
+  instructions String?
+
   consignments  Consignment[]
   orderCounters OrderCounter[]
+
+  ratePlans RatePlan[]
 
   @@map("clients")
 }
@@ -100,8 +125,49 @@ model ServiceLevel {
 
   consignments Consignment[]
 
+  ratePlanItems RatePlanItem[]
+
   @@index([active, sortOrder])
   @@map("service_levels")
+}
+
+/// A priced extra an order can carry — "Tailgate", "Inside Delivery", "Wait Time".
+/// Same shape and rules as ServiceLevel: renamed in place, deactivated rather than
+/// deleted. Nothing references it yet; the rate plan will.
+model AdditionalService {
+  id   String @id @default(cuid())
+  name String @unique
+
+  active    Boolean @default(true)
+  /// Position in the list. Ties fall back to name order.
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ratePlanItems RatePlanItem[]
+
+  @@index([active, sortOrder])
+  @@map("additional_services")
+}
+
+/// What is carried, as a priceable *type* — "Skid", "Carton", "Envelope".
+/// Distinct from `Item`, which is one physical line on one order: this is the
+/// catalogue a rate plan attaches a price to.
+model FreightItem {
+  id   String @id @default(cuid())
+  name String @unique
+
+  active    Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ratePlanItems RatePlanItem[]
+
+  @@index([active, sortOrder])
+  @@map("freight_items")
 }
 
 model Driver {
@@ -140,6 +206,13 @@ model Driver {
   /// the 9th driver's creation.
   mapColorIndex Int?
 
+  /// Object paths in the private `driver-docs` bucket, not URLs: a stored URL
+  /// would expire. Reads mint a short-lived signed link on demand. The path keeps
+  /// its extension, which is where the mime type comes from, so there is no
+  /// separate mime column, and carries a random segment so it is not guessable.
+  photoPath  String?
+  idCardPath String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -148,6 +221,8 @@ model Driver {
   consignments   Consignment[]
   trackingEvents TrackingEvent[]
   proofs         ProofOfDelivery[]
+  /// Document signatures this driver collected at a stop.
+  docSignatures  OrderDocumentSignature[]
   /// Movement history, append-only.
   locations      DriverLocation[]
   /// Current position — at most one row, overwritten on every report.
@@ -390,6 +465,15 @@ model Consignment {
   createdByUserId     String?
   lastUpdatedByUserId String?
 
+  /// DEPRECATED — superseded by the `documents` relation (`OrderDocument`), which
+  /// can carry two kinds of document and say which stop each applies to. Nothing
+  /// reads or writes this column any more.
+  ///
+  /// Kept rather than dropped because dropping a column is destructive and this
+  /// one held live data on other deployments. Remove it in a deliberate migration
+  /// once every environment has been checked, not as a side effect of `db:push`.
+  releaseLetterPath String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -397,6 +481,8 @@ model Consignment {
   proofs         ProofOfDelivery[]
   trackingEvents TrackingEvent[]
   locations      DriverLocation[]
+  /// Release letter and bill of lading, with the stops each applies to.
+  documents      OrderDocument[]
   /// Places this order holds on planned routes.
   routeStops     RouteStop[]
 
@@ -416,23 +502,24 @@ model Item {
   consignmentId String
   consignment   Consignment @relation(fields: [consignmentId], references: [id], onDelete: Cascade)
 
-  /// The client's own line reference (a tracking number or SKU), shown as the
-  /// "Reference" column. Kept as `barcode` in the database — it is what the
-  /// scanner reads — but it need not be scannable.
+  /// The client's own line reference (a tracking number or SKU). Kept as
+  /// `barcode` in the database — it is what the scanner reads — but it need not
+  /// be scannable. The console no longer has an input for it, so items created
+  /// there are NULL; the API still accepts and returns it.
   barcode     String?
   description String
-  qty         Int      @default(1)
+  qty         Int     @default(1)
 
   /// Weight of the WHOLE line in pounds, exactly as the operator typed it — not a
   /// per-unit figure, so an order total is a plain sum and is never multiplied by
   /// qty. Pounds because that is what the clients' paperwork uses.
-  weightLb    Decimal? @db.Decimal(10, 3)
+  weightLb Decimal? @db.Decimal(10, 3)
 
   /// Outer dimensions in inches. Cubic is derived (L × W × H, in cubic metres)
   /// and deliberately not stored, so it can never disagree with these three.
-  lengthIn    Decimal? @db.Decimal(8, 2)
-  widthIn     Decimal? @db.Decimal(8, 2)
-  heightIn    Decimal? @db.Decimal(8, 2)
+  lengthIn Decimal? @db.Decimal(8, 2)
+  widthIn  Decimal? @db.Decimal(8, 2)
+  heightIn Decimal? @db.Decimal(8, 2)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -478,6 +565,23 @@ model ProofOfDelivery {
   /// Nullable for the same reason as `signedByName` — proofs predating the
   /// column were never counted.
   itemCount Int?
+
+  /// Where the driver's phone was, copied from `driver_positions` inside the
+  /// capture transaction. The app sends no coordinate — this is the position it
+  /// has been reporting all shift anyway.
+  ///
+  /// Snapshotted rather than joined, because neither position table can answer
+  /// this later: the live row is overwritten within seconds, and the history is
+  /// pruned after 7 days. Nullable because a driver who has never pinged has no
+  /// row to copy, and every proof taken before this column existed has none.
+  podLat       Float?
+  podLng       Float?
+  podAccuracyM Float?
+
+  /// The device's own time for that fix, NOT the moment of capture. A
+  /// last-known position can be minutes stale, so the POD report prints this
+  /// beside the coordinate rather than implying a precision it does not have.
+  podFixAt DateTime?
 
   capturedAt         DateTime @default(now())
   capturedByDriverId String?
@@ -748,4 +852,162 @@ enum RouteStatus {
 enum SequenceSource {
   OPTIMISED
   MANUAL
+}
+
+// ---------------------------------------------------------------------------
+// Rating
+// ---------------------------------------------------------------------------
+
+/// A price list belonging to one client.
+///
+/// The base-rate fields are the rate builder's first tab: `baseRate` covers the
+/// first `includedKm`, and every further `blockKm` costs `blockRate`. Blocks are
+/// charged whole, so with 25 km included and 25 km blocks a 51 km job pays two
+/// blocks, not 1.04 — the quote prints that arithmetic rather than hiding it.
+///
+/// One plan per client may be active at a time (partial unique index), so there
+/// is never a question about which price applied. Retired plans stay for
+/// reference.
+model RatePlan {
+  id       String @id @default(cuid())
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+
+  name     String
+  active   Boolean @default(true)
+  currency String  @default("CAD")
+
+  /// Money is Decimal, never Float: a cent of drift per line becomes a
+  /// reconciliation argument at month end.
+  baseRate   Decimal @default(0) @db.Decimal(12, 2)
+  includedKm Int     @default(0)
+  /// Must be > 0 (CHECK) — the quote divides by it.
+  blockKm    Int     @default(25)
+  blockRate  Decimal @default(0) @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items RatePlanItem[]
+
+  @@index([clientId, active])
+  @@map("rate_plans")
+}
+
+/// One priced catalogue entry inside a plan.
+///
+/// Exactly one of the three ids is set (CHECK), which keeps real foreign keys
+/// while leaving one table, one CRUD and one grid in the UI. A missing row means
+/// "not priced for this client" — distinct from a row priced at 0, which means
+/// deliberately free. The quote warns about the first and bills the second.
+model RatePlanItem {
+  id         String   @id @default(cuid())
+  ratePlanId String
+  ratePlan   RatePlan @relation(fields: [ratePlanId], references: [id], onDelete: Cascade)
+
+  serviceLevelId      String?
+  serviceLevel        ServiceLevel?      @relation(fields: [serviceLevelId], references: [id], onDelete: Restrict)
+  additionalServiceId String?
+  additionalService   AdditionalService? @relation(fields: [additionalServiceId], references: [id], onDelete: Restrict)
+  freightItemId       String?
+  freightItem         FreightItem?       @relation(fields: [freightItemId], references: [id], onDelete: Restrict)
+
+  price Decimal @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([ratePlanId, serviceLevelId])
+  @@unique([ratePlanId, additionalServiceId])
+  @@unique([ratePlanId, freightItemId])
+  @@index([ratePlanId])
+  @@map("rate_plan_items")
+}
+
+// ---------------------------------------------------------------------------
+// Order documents  (release letter / bill of lading, shown and signed per leg)
+// ---------------------------------------------------------------------------
+
+enum OrderDocumentKind {
+  RELEASE_LETTER
+  BILL_OF_LADING
+}
+
+/// A document attached to an order, with the stops it applies to.
+///
+/// This replaces the single `Consignment.releaseLetterPath`, because one
+/// nullable column cannot express "the BOL must be signed at the drop, but the
+/// release letter is only shown at the collection". The four flags are the whole
+/// point: either document may be shown at either stop, or signed at either, in
+/// any combination.
+///
+/// At most one row per kind per order. A replacement letter is a new upload over
+/// the same row, not a second row — a stop with two competing release letters is
+/// a question nobody at a cargo desk can answer.
+model OrderDocument {
+  id            String      @id @default(cuid())
+  consignmentId String
+  consignment   Consignment @relation(fields: [consignmentId], references: [id], onDelete: Cascade)
+
+  kind OrderDocumentKind
+
+  path  String
+  mime  String
+  bytes Int
+
+  /// Which stops the driver is shown it at. Both default to true so an upload
+  /// with nothing ticked behaves like the release letter always did: a driver
+  /// seeing a document they did not need is harmless, not seeing one they did
+  /// is the failure this feature exists to prevent.
+  showAtPickup   Boolean @default(true)
+  showAtDelivery Boolean @default(true)
+
+  /// Which stops it must be SIGNED at. Default false — signing blocks proof
+  /// capture, so it is never switched on by accident. The service enforces that
+  /// a sign flag implies the matching show flag, so the two cannot disagree.
+  signAtPickup   Boolean @default(false)
+  signAtDelivery Boolean @default(false)
+
+  uploadedByUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  signatures OrderDocumentSignature[]
+
+  @@unique([consignmentId, kind])
+  @@index([consignmentId])
+  @@map("order_documents")
+}
+
+/// One signature per document per leg, drawn on the driver's phone.
+///
+/// `signedPath` is a COPY of the document with the signature appended as a final
+/// page. The original upload is never modified, because it is the record of what
+/// was sent; the copy is the record of what was agreed. It is nullable because
+/// the stamp is produced after the signature is safely stored — a PDF this
+/// library cannot parse must cost us the stamped copy, never the signature.
+model OrderDocumentSignature {
+  id         String        @id @default(cuid())
+  documentId String
+  document   OrderDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  leg PodLeg
+
+  signaturePath  String
+  signatureMime  String
+  signatureBytes Int
+
+  signedPath  String?
+  signedMime  String?
+  signedBytes Int?
+
+  capturedAt         DateTime @default(now())
+  capturedByDriverId String?
+  capturedByDriver   Driver?  @relation(fields: [capturedByDriverId], references: [id], onDelete: SetNull)
+  capturedByUserId   String?
+
+  @@unique([documentId, leg])
+  @@index([documentId])
+  @@map("order_document_signatures")
 }

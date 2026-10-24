@@ -1,6 +1,12 @@
 import { ConsignmentStatus, PodLeg, Prisma } from '@prisma/client';
 import { env } from '../../config/env.js';
 import { AppError } from '../../utils/httpError.js';
+/*
+ * The paperwork gate. A cross-module read, listed as tolerated in CLAUDE.md: the
+ * rule is "this leg's required documents are signed", which only that module can
+ * answer, and a copy of the query here would be free to drift away from it.
+ */
+import * as orderDocs from '../orderDocs/orderDocs.service.js';
 import { sniffImage } from '../../utils/imageSniff.js';
 import { STATUS_LABELS } from '../../constants/enums.js';
 import { canTransition } from '../../constants/statusFlow.js';
@@ -120,6 +126,25 @@ export async function captureProof(
 
   if (!canTransition(consignment.status, rule.to, 'POD')) {
     throw AppError.conflict('That status change is not allowed');
+  }
+
+  /*
+   * Paperwork gate. A document the operator marked "sign at this stop" must have
+   * its signature before the leg may be closed - that flag is a rule, not a hint.
+   *
+   * Checked here, after the status guards and before anything is uploaded, so a
+   * refusal costs a message and leaves no orphaned objects in storage.
+   *
+   * There is deliberately NO waive path: clearing the requirement is an operator
+   * action on the document itself, which leaves a record of who decided the stop
+   * could go unsigned. The cost is real and was accepted - a driver whose
+   * signature pad is dead cannot close the stop until dispatch clears the flag.
+   */
+  const unsigned = await orderDocs.blockingDocuments(consignmentId, leg);
+  if (unsigned.length) {
+    throw AppError.conflict(
+      `The ${unsigned.join(' and ')} must be signed at this stop before proof can be captured`,
+    );
   }
 
   const photoPath = storage.objectPath(consignmentId, leg, 'photo', photo.ext);
