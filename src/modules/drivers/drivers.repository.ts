@@ -42,13 +42,45 @@ export function findDriverById(id: string) {
 }
 
 /** The jobs assigned to one driver. Scoping is the caller's responsibility. */
-export function findConsignmentsForDriver(driverId: string, includeDelivered: boolean) {
+/** Which slice of a driver's work a caller is asking for. */
+export type DriverScope = 'live' | 'delivered' | 'all';
+
+function scopeWhere(driverId: string, scope: DriverScope) {
+  if (scope === 'delivered') return { driverId, status: ConsignmentStatus.DELIVERED };
+  if (scope === 'live') return { driverId, status: { not: ConsignmentStatus.DELIVERED } };
+  return { driverId };
+}
+
+/** How many rows that slice holds — what lets a client show a count it has not downloaded. */
+export function countConsignmentsForDriver(driverId: string, scope: DriverScope) {
+  return prisma.consignment.count({ where: scopeWhere(driverId, scope) });
+}
+
+export function findConsignmentsForDriver(
+  driverId: string,
+  scope: DriverScope,
+  paging?: { skip: number; take: number },
+) {
   return prisma.consignment.findMany({
-    where: {
-      driverId,
-      ...(includeDelivered ? {} : { status: { not: ConsignmentStatus.DELIVERED } }),
-    },
-    orderBy: [{ deliverBefore: 'asc' }, { createdAt: 'asc' }],
+    where: scopeWhere(driverId, scope),
+    ...(paging ?? {}),
+    /*
+     * Delivered history reads newest-first; live work reads by deadline.
+     *
+     * The ordering matters far more once a slice is paged. An unpaged client can
+     * re-sort whatever it receives, and the app does — but a client holding page
+     * 3 of 40 can only sort the twenty rows in its hand, so the server's order
+     * IS the order. `updatedAt` is the moment the job was completed, which is
+     * what "most recent" means for history.
+     *
+     * `id` breaks ties. Without it two rows sharing a timestamp can swap places
+     * between queries, and a row that moves across a page boundary is either
+     * fetched twice or skipped entirely.
+     */
+    orderBy:
+      scope === 'delivered'
+        ? [{ updatedAt: 'desc' as const }, { id: 'desc' as const }]
+        : [{ deliverBefore: 'asc' as const }, { createdAt: 'asc' as const }],
     select: {
       id: true,
       orderNo: true,

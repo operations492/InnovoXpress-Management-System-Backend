@@ -1,5 +1,6 @@
 import { ConsignmentStatus } from '@prisma/client';
 import * as repo from './drivers.repository.js';
+import { buildPageMeta, paginate } from '../../utils/pagination.js';
 import type { DriverConsignmentRow } from './drivers.repository.js';
 
 /**
@@ -52,7 +53,47 @@ function withNextAction(row: DriverConsignmentRow) {
  * Delivered jobs are excluded by default: the driver's screen should show what
  * is left to do, not a growing history.
  */
-export async function myConsignments(driverId: string, includeDelivered = false) {
-  const rows = await repo.findConsignmentsForDriver(driverId, includeDelivered);
-  return { data: rows.map(withNextAction) };
+export interface MyConsignmentsQuery {
+  /** Newer and more precise than `includeDelivered`; when present it decides alone. */
+  scope?: 'live' | 'delivered';
+  includeDelivered?: boolean;
+  page?: number;
+  pageSize?: number;
+}
+
+/**
+ * A driver's own work, whole or by the page.
+ *
+ * Paging is opt-in, and the response shape follows suit: ask without `page` and
+ * you get `{ data }` exactly as before, so every existing caller is untouched.
+ * Ask with it and `meta` comes too.
+ *
+ * `meta.total` is the point of the whole exercise. It lets a client label a tab
+ * "Completed 437" while holding only the first twenty rows — without it, showing
+ * a count would mean downloading everything, which is the cost paging exists to
+ * remove.
+ */
+export async function myConsignments(driverId: string, query: MyConsignmentsQuery = {}) {
+  const scope: repo.DriverScope =
+    query.scope ?? (query.includeDelivered ? 'all' : 'live');
+
+  if (query.page === undefined) {
+    const rows = await repo.findConsignmentsForDriver(driverId, scope);
+    return { data: rows.map(withNextAction) };
+  }
+
+  const page = query.page;
+  const pageSize = query.pageSize ?? 20;
+
+  /*
+   * Count and page together, not in sequence. They are independent reads and
+   * the round trip is the expensive part on a mobile connection — serialising
+   * them would double the wait for no benefit.
+   */
+  const [rows, total] = await Promise.all([
+    repo.findConsignmentsForDriver(driverId, scope, paginate(page, pageSize)),
+    repo.countConsignmentsForDriver(driverId, scope),
+  ]);
+
+  return { data: rows.map(withNextAction), meta: buildPageMeta(total, page, pageSize) };
 }

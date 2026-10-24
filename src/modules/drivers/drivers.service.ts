@@ -132,6 +132,22 @@ export async function driverDocuments(id: string) {
  * file that was never written. The old object is removed only once the new path
  * is committed, so a failed swap leaves the previous document intact.
  */
+/** Take a document down. The counterpart of `putDriverDocument`, same storage rules. */
+export async function removeDriverDocument(id: string, kind: DriverDocKind) {
+  const d = await repo.findDocPaths(id);
+  if (!d) throw AppError.notFound('Driver not found');
+
+  const field = DOC_FIELD[kind];
+  const previous = d[field];
+
+  // Row first, then the object: a path pointing at nothing is a broken image on
+  // every screen, while an unreferenced file is invisible.
+  await repo.setDocPath(id, field, null);
+  if (previous) await removeObjects([previous]);
+
+  return driverDocuments(id);
+}
+
 export async function putDriverDocument(id: string, kind: DriverDocKind, file?: Express.Multer.File) {
   if (!file) throw AppError.badRequest('Attach the image as the "file" field');
 
