@@ -81,3 +81,41 @@ export const trailQuerySchema = z
 export type RecordLocationsInput = z.infer<typeof recordLocationsSchema>;
 export type TrailQuery = z.infer<typeof trailQuerySchema>;
 export type LatestLocationsQuery = z.infer<typeof latestLocationsQuerySchema>;
+
+/* -------------------------------------------------------------- roster writes
+ * The Drivers tab owns the roster row now. Account creation stays in
+ * `user.schema.ts` — a login is a different thing from a courier.
+ */
+const driverName = z.string().trim().min(1, 'Name is required').max(120);
+const driverCode = z.string().trim().min(1).max(20);
+
+export const createDriverSchema = z
+  .object({
+    name: driverName,
+    /** Unique across the roster; a duplicate is a 409 from the database. */
+    code: driverCode.optional(),
+    mobile: z.string().trim().max(40).optional(),
+    email: z.string().trim().max(160).optional(),
+  })
+  .strict();
+
+export const updateDriverSchema = z
+  .object({
+    name: driverName.optional(),
+    code: driverCode.nullable().optional(),
+    mobile: z.string().trim().max(40).nullable().optional(),
+    email: z.string().trim().max(160).nullable().optional(),
+    /** Deactivating also clocks them off and stamps the shift's end. */
+    active: z.boolean().optional(),
+  })
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nothing to update' });
+
+export const driverIdParamSchema = z.object({ id: z.string().min(1) }).strict();
+
+export const driverDocKindParamSchema = z
+  .object({ id: z.string().min(1), kind: z.enum(['photo', 'id-card']) })
+  .strict();
+
+export type CreateDriverInput = z.infer<typeof createDriverSchema>;
+export type UpdateDriverInput = z.infer<typeof updateDriverSchema>;

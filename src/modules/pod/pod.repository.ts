@@ -62,6 +62,20 @@ export interface CaptureInput {
 export function captureProofTx(input: CaptureInput) {
   return prisma.$transaction(
     async (tx) => {
+      /*
+       * Where the driver is, copied onto the proof while it still means
+       * something. `driver_positions` is overwritten within seconds and
+       * `driver_locations` is pruned after a week, so a proof that does not keep
+       * its own copy can never be placed on a map again.
+       *
+       * A primary-key lookup, and tolerant of a missing row: a driver whose
+       * phone has never reported a position still gets to deliver.
+       */
+      const fix = await tx.driverPosition.findUnique({
+        where: { driverId: input.driverId },
+        select: { lat: true, lng: true, accuracyM: true, recordedAt: true },
+      });
+
       const { count } = await tx.consignment.updateMany({
         where: { id: input.consignmentId, status: input.from },
         data: {
@@ -89,6 +103,10 @@ export function captureProofTx(input: CaptureInput) {
           itemCount: input.itemCount ?? null,
           capturedByDriverId: input.driverId,
           capturedByUserId: input.actorId,
+          podLat: fix?.lat ?? null,
+          podLng: fix?.lng ?? null,
+          podAccuracyM: fix?.accuracyM ?? null,
+          podFixAt: fix?.recordedAt ?? null,
           idempotencyKey: input.idempotencyKey ?? null,
         },
       });

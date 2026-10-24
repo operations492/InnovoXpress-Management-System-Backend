@@ -7,6 +7,7 @@ import {
   type MapTab,
 } from '../../constants/mapTabs.js';
 import type { MapDriversQuery, MapPinsQuery } from '../../schemas/map.schema.js';
+import { signedUrl } from '../../utils/driverDocs.js';
 
 /*
  * Business rules for the dispatch map. Never imports prisma.
@@ -257,14 +258,20 @@ export async function drivers(query: MapDriversQuery) {
   // a driver with nothing to do must still appear — they are precisely the one a
   // dispatcher is looking for.
   return {
-    data: roster.map((d) => ({
-      id: d.id,
-      name: d.name,
-      code: d.code,
-      active: d.active,
-      onShift: d.onShift,
-      colorIndex: colorOf(d),
-      assignedCount: counts.get(d.id) ?? 0,
-    })),
+    data: await Promise.all(
+      // One signed link per driver — eight rows, fetched once. If this roster ever
+      // gets large, move the photo out to a separate lookup instead.
+      roster.map(async (d) => ({
+        id: d.id,
+        name: d.name,
+        code: d.code,
+        active: d.active,
+        onShift: d.onShift,
+        colorIndex: colorOf(d),
+        assignedCount: counts.get(d.id) ?? 0,
+        /** The driver's own face for the waypoint popup; null until one is uploaded. */
+        photoUrl: await signedUrl(d.photoPath),
+      })),
+    ),
   };
 }

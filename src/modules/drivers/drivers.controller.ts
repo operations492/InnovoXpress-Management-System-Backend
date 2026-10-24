@@ -50,3 +50,38 @@ export const myConsignments = asyncHandler(async (req, res) => {
       }),
     );
 });
+
+/* ------------------------------------------------- roster CRUD + documents */
+
+export const get = asyncHandler(async (req, res) => {
+  res.status(200).json(await driversService.getDriver(req.params.id as string));
+});
+
+export const create = asyncHandler(async (req, res) => {
+  res.status(201).json(await driversService.createDriver(req.body));
+});
+
+export const update = asyncHandler(async (req, res) => {
+  res.status(200).json(await driversService.updateDriver(req.params.id as string, req.body));
+});
+
+/**
+ * Removing a courier still runs the users-module rule: it is a 409 once they have
+ * any consignment or proof, because deleting would erase who delivered what. The
+ * logic was not copied — the old `/api/users/drivers/:id` route calls the same
+ * function, so there is one implementation of that refusal.
+ */
+export const remove = asyncHandler(async (req, res) => {
+  res.status(200).json(await usersService.removeDriver(req.params.id as string));
+});
+
+export const documents = asyncHandler(async (req, res) => {
+  res.status(200).json(await driversService.driverDocuments(req.params.id as string));
+});
+
+export const putDocument = asyncHandler(async (req, res) => {
+  const kind = req.params.kind as 'photo' | 'id-card';
+  res
+    .status(200)
+    .json(await driversService.putDriverDocument(req.params.id as string, kind, req.file));
+});

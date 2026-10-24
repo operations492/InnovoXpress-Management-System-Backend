@@ -48,6 +48,23 @@ export async function removeObjects(paths: string[]): Promise<void> {
   }
 }
 
+/**
+ * The bytes themselves, for embedding in a generated PDF.
+ *
+ * `signedUrl` is the right answer for a browser; a server-side renderer needs the
+ * file in hand. Returns null instead of throwing, the same way `signedUrl` does:
+ * a POD report missing one photo is worth far more than no report at all.
+ */
+export async function downloadObject(path: string): Promise<Buffer | null> {
+  const { data, error } = await supabase.storage.from(POD_BUCKET).download(path);
+
+  if (error || !data) {
+    console.error('Failed to download proof object', path, error);
+    return null;
+  }
+  return Buffer.from(await data.arrayBuffer());
+}
+
 /** A time-limited link. The bucket is private, so this is the only way to view a file. */
 export async function signedUrl(path: string): Promise<string | null> {
   const { data, error } = await supabase.storage

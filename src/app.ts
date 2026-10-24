@@ -8,7 +8,12 @@ import { errorHandler } from './middleware/errorHandler.js';
 
 import authRoutes from './modules/auth/auth.routes.js';
 import referenceRoutes from './modules/reference/reference.routes.js';
+import clientRoutes from './modules/clients/clients.routes.js';
 import serviceLevelRoutes from './modules/serviceLevels/serviceLevels.routes.js';
+import additionalServiceRoutes from './modules/additionalServices/additionalServices.routes.js';
+import freightItemRoutes from './modules/freightItems/freightItems.routes.js';
+import ratePlanRoutes from './modules/ratePlans/ratePlans.routes.js';
+import invoiceRoutes from './modules/invoices/invoices.routes.js';
 import consignmentRoutes from './modules/consignments/consignments.routes.js';
 import driverRoutes from './modules/drivers/drivers.routes.js';
 import userRoutes from './modules/users/users.routes.js';
@@ -38,7 +43,12 @@ app.get(
 
 app.use('/api/auth', authRoutes);
 app.use('/api/reference', referenceRoutes);
+app.use('/api/clients', clientRoutes);
 app.use('/api/service-levels', serviceLevelRoutes);
+app.use('/api/additional-services', additionalServiceRoutes);
+app.use('/api/freight-items', freightItemRoutes);
+app.use('/api/rate-plans', ratePlanRoutes);
+app.use('/api/invoices', invoiceRoutes);
 app.use('/api/consignments', consignmentRoutes);
 app.use('/api/drivers', driverRoutes);
 app.use('/api/users', userRoutes);
