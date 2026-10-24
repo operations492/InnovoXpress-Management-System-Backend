@@ -27,7 +27,9 @@ export function findProfileWithDriver(id: string) {
       role: true,
       active: true,
       driverId: true,
-      driver: { select: { id: true, name: true, code: true, active: true, onShift: true } },
+      driver: {
+        select: { id: true, name: true, code: true, active: true, onShift: true, photoPath: true },
+      },
     },
   });
 }

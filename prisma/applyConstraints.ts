@@ -21,6 +21,7 @@ const SQL_FILES = [
   // Plain columns again, and here for the same reason as pod.sql: `prisma db
   // push` cannot be run against this database.
   'push.sql',
+  'avatar.sql',
 ];
 
 /**

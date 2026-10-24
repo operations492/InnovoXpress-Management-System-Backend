@@ -352,6 +352,22 @@ model User {
   /// exactly right for a browser-only operator.
   pushToken String?
 
+  /// Where this person's profile photo sits in the private `avatars` bucket —
+  /// a bucket-relative key like `b3f1…/avatar.jpg`, never a URL.
+  ///
+  /// A URL would be the wrong thing to store twice over: the bucket is private,
+  /// so every readable link is signed and expires within the hour, and a column
+  /// full of dead links is worse than a column of keys you can always re-sign.
+  /// Clients get `avatarUrl` minted fresh on each read.
+  ///
+  /// On the USER rather than the Driver for the same reason as `pushToken`: it
+  /// belongs to a person, not to a roster entry. An operator has a face too, and
+  /// the console's Users screen can show it without a second column.
+  ///
+  /// Null means no photo, which is the normal state — uploading one is optional,
+  /// and every surface falls back to the person's initials.
+  avatarPath String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

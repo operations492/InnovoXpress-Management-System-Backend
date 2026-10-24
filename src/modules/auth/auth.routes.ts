@@ -3,6 +3,7 @@ import * as controller from './auth.controller.js';
 import { authenticate } from '../../middleware/auth.js';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { validate } from '../../middleware/validate.js';
+import { uploadAvatarFile } from '../../middleware/upload.js';
 import { pushTokenSchema } from '../../schemas/push.schema.js';
 
 const router = Router();
@@ -31,5 +32,17 @@ router.post(
   validate(pushTokenSchema),
   asyncHandler(controller.setPushToken),
 );
+
+/**
+ * This person's own profile photo.
+ *
+ * Under `/auth` rather than `/users` for the same reason as `/push-token`: it is
+ * scoped to whoever holds the token, and `/users` is admin-only. A driver must
+ * be able to change their own picture without being able to touch anybody
+ * else's — which is exactly what taking the id from the token and never from the
+ * request buys.
+ */
+router.post('/avatar', authenticate, uploadAvatarFile, asyncHandler(controller.setAvatar));
+router.delete('/avatar', authenticate, asyncHandler(controller.removeAvatar));
 
 export default router;
