@@ -1,28 +1,29 @@
 import * as repo from './auth.repository.js';
-import * as storage from './auth.storage.js';
 import { AppError } from '../../utils/httpError.js';
-import { sniffImage } from '../../utils/imageSniff.js';
-
-/** Every extension an avatar can be stored under — see `clearSiblings`. */
-const AVATAR_EXTENSIONS = ['png', 'jpg', 'webp'] as const;
+import { signedUrl } from '../../utils/driverDocs.js';
+// The driver's photo is a roster document, owned by the drivers module. This
+// module only exposes it to the person it belongs to; storage rules stay there.
+import * as driversService from '../drivers/drivers.service.js';
 
 /**
- * Delete the other formats this person might have had.
+ * A driver's profile picture is `drivers.photoPath`, not a separate avatar.
  *
- * Switching from a JPEG to a PNG writes a new key beside the old one rather than
- * replacing it, because the extension is part of the name. Rather than remember
- * the previous path and race against a concurrent upload, this just removes
- * every key the person could own except the one that was kept — the set is tiny
- * and completely determined by the user id.
+ * There were briefly two: this module stored one in an `avatars` bucket for the
+ * phone, while the console stored another beside the driver's ID card in
+ * `driver-docs`. Same face, two columns, two buckets — a driver changed their
+ * picture in the app and the console kept showing the old one. The console's is
+ * the one that survives, because it is the one an admin manages alongside the
+ * rest of the roster record.
  *
- * Best-effort, like the removal underneath it: an orphan is a few kilobytes in a
- * private bucket, and must never fail an upload that has already succeeded.
+ * The endpoints here did not change shape: `/me` still answers `avatarUrl` and
+ * `POST /avatar` still takes one file, so the driver app needed no change at
+ * all. Only what they read and write underneath moved.
  */
-async function clearSiblings(userId: string, keepPath: string | null) {
-  const stale = AVATAR_EXTENSIONS.map((ext) => storage.objectPath(userId, ext)).filter(
-    (path) => path !== keepPath,
-  );
-  await storage.removeObjects(stale);
+function driverIdOrRefuse(driverId: string | null): string {
+  if (!driverId) {
+    throw AppError.forbidden('Only a driver account has a profile picture');
+  }
+  return driverId;
 }
 
 /**
@@ -54,7 +55,7 @@ export async function me(userId: string) {
      * show a face is never a reason to fail "who am I", which gates the whole
      * app behind it.
      */
-    avatarUrl: user.avatarPath ? await storage.signedUrl(user.avatarPath) : null,
+    avatarUrl: await signedUrl(user.driver?.photoPath ?? null),
     /** Present only for drivers — what the phone needs to show its own state. */
     driver: user.driver
       ? {
@@ -92,34 +93,26 @@ export async function setPushToken(userId: string, pushToken: string | null) {
  * is client-supplied and trivially forged. A caller could otherwise have the
  * bucket serve arbitrary content under an image name.
  */
-export async function setAvatar(userId: string, file: { buffer: Buffer }) {
-  const sniffed = sniffImage(file.buffer);
-  if (!sniffed) {
-    throw AppError.badRequest(
-      'That file is not a JPEG, PNG or WebP image (its actual contents were checked, not its declared type)',
-    );
-  }
+export async function setAvatar(userId: string, file: Express.Multer.File) {
+  const user = await repo.findUserById(userId);
+  if (!user) throw AppError.unauthorized();
 
-  const path = storage.objectPath(userId, sniffed.ext);
-  await storage.uploadObject(path, file.buffer, sniffed.mime);
-  await repo.setAvatarPath(userId, path);
+  // Delegated, not reimplemented: sniffing, the object path, replacing the
+  // previous file and signing the result are the drivers module's rules, and a
+  // second copy of them here is how the two ended up disagreeing before.
+  const docs = await driversService.putDriverDocument(
+    driverIdOrRefuse(user.driverId),
+    'photo',
+    file,
+  );
 
-  // Only after the row points at the new object — a crash before this leaves an
-  // unreferenced file, which is harmless; doing it first could delete the photo
-  // still in use.
-  await clearSiblings(userId, path);
-
-  return { avatarUrl: await storage.signedUrl(path) };
+  return { avatarUrl: docs.photoUrl };
 }
 
-/**
- * Remove this person's profile photo.
- *
- * The row is cleared before the objects, so a failure midway leaves files with
- * nothing pointing at them rather than a path pointing at nothing — the first is
- * invisible, the second is a broken image on every screen that shows them.
- */
+/** Take the profile picture down. The ID card beside it is untouched. */
 export async function removeAvatar(userId: string) {
-  await repo.setAvatarPath(userId, null);
-  await clearSiblings(userId, null);
+  const user = await repo.findUserById(userId);
+  if (!user) throw AppError.unauthorized();
+
+  await driversService.removeDriverDocument(driverIdOrRefuse(user.driverId), 'photo');
 }
