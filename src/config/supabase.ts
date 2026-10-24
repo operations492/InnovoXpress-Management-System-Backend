@@ -36,8 +36,7 @@ export const CHAT_BUCKET = env.CHAT_STORAGE_BUCKET;
  * Its own bucket rather than a folder in `pod`: that bucket is evidence, with a
  * retention story and a seed script that empties it, and a profile photo is
  * neither.
- */
-export const AVATAR_BUCKET = env.AVATAR_STORAGE_BUCKET;
+ */
 export const DRIVER_DOCS_BUCKET = env.DRIVER_DOCS_BUCKET;
 
 /**
