@@ -12,6 +12,7 @@
 # Dependencies and build output
 # ---------------------------------------------------------------------------
 node_modules/
+Finance/
 dist/
 build/
 *.tsbuildinfo
