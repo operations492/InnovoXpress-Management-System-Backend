@@ -6,6 +6,12 @@ export const entrySelect = {
   name: true,
   active: true,
   sortOrder: true,
+  defaultRate: true,
+  trigger: true,
+  weekdayFrom: true,
+  weekdayTo: true,
+  weekendFrom: true,
+  weekendTo: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.AdditionalServiceSelect;
@@ -37,7 +43,9 @@ export async function nextSortOrder(): Promise<number> {
   return (last._max.sortOrder ?? -1) + 1;
 }
 
-export function create(data: { name: string; sortOrder: number }): Promise<EntryRow> {
+export function create(
+  data: { name: string; sortOrder: number; defaultRate?: number | null },
+): Promise<EntryRow> {
   return prisma.additionalService.create({ data, select: entrySelect });
 }
 

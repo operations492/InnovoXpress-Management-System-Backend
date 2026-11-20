@@ -10,6 +10,13 @@ export const fullInclude = {
   client: { select: { id: true, name: true, code: true } },
   driver: { select: { id: true, name: true, code: true, mobile: true } },
   serviceLevel: { select: { id: true, name: true } },
+  freightItem: { select: { id: true, name: true } },
+  /// Accessorials ticked for this job. Name only — the price belongs to the
+  /// rate card and is resolved when the job is invoiced, not when it is logged.
+  services: {
+    orderBy: { additionalService: { sortOrder: 'asc' } },
+    select: { additionalService: { select: { id: true, name: true } } },
+  },
   items: { orderBy: { createdAt: 'asc' } },
   proofs: true,
   documents: { select: { kind: true } },
@@ -28,6 +35,7 @@ export const summarySelect = {
   id: true,
   orderNo: true,
   clientReference: true,
+  customerName: true,
   status: true,
   priority: true,
   taskType: true,
@@ -53,6 +61,8 @@ export const summarySelect = {
   client: { select: { id: true, name: true, code: true } },
   driver: { select: { id: true, name: true } },
   serviceLevel: { select: { id: true, name: true } },
+  freightItem: { select: { id: true, name: true } },
+  _count: { select: { services: true } },
   items: { select: { qty: true, weightLb: true, lengthIn: true, widthIn: true, heightIn: true } },
 } satisfies Prisma.ConsignmentSelect;
 
@@ -123,6 +133,8 @@ export function buildWhere(q: ListConsignmentsQuery): Prisma.ConsignmentWhereInp
     where.OR = [
       { orderNo: like },
       { clientReference: like },
+      // So a Walk-in order is findable by the name the operator typed.
+      { customerName: like },
       { senderName: like },
       { receiverName: like },
       { senderCity: like },
@@ -154,8 +166,98 @@ export function findClientById(id: string) {
   });
 }
 
+/** The built-in account an order belongs to when no client was picked. */
+export const WALK_IN = { code: 'WLK', name: 'Walk-in' } as const;
+
+/**
+ * The Walk-in client, created the first time anyone needs it.
+ *
+ * An upsert keyed on the code, so concurrent first creates converge on one row
+ * rather than racing to two. It is a real client row on purpose: the order
+ * number, the per-client reference rule and every join on clients then work
+ * for walk-in orders without a single special case. `active` is forced back on
+ * because a deactivated Walk-in would make every unpicked order fail to save.
+ */
+export function findOrCreateWalkInClient() {
+  return prisma.client.upsert({
+    where: { code: WALK_IN.code },
+    update: { active: true },
+    create: { code: WALK_IN.code, name: WALK_IN.name, active: true },
+    select: { id: true, name: true, code: true, active: true },
+  });
+}
+
 export function findServiceLevelById(id: string) {
   return prisma.serviceLevel.findUnique({
+    where: { id },
+    select: { id: true, name: true, active: true },
+  });
+}
+
+/**
+ * Replace every accessorial on a job in one go.
+ *
+ * Delete-then-insert rather than a diff: the form hands back the whole
+ * tick-list, so working out which boxes changed would be effort spent to
+ * arrive at the same two rows. Done in a transaction so a half-applied list
+ * cannot survive a failure.
+ */
+export function replaceServices(consignmentId: string, additionalServiceIds: string[]) {
+  return prisma.$transaction([
+    prisma.consignmentService.deleteMany({ where: { consignmentId } }),
+    prisma.consignmentService.createMany({
+      data: additionalServiceIds.map((additionalServiceId) => ({
+        consignmentId,
+        additionalServiceId,
+      })),
+      skipDuplicates: true,
+    }),
+  ]);
+}
+
+/**
+ * The manual charges available to this customer: the ones priced on their
+ * active rate card.
+ *
+ * AFTER_HOURS is excluded by design — the system decides that one for itself
+ * from the requested times, and offering it as a tick-box would invite an
+ * operator to disagree with it.
+ */
+export async function findServicesForClient(clientId: string, on: Date) {
+  const card = await prisma.rateCard.findFirst({
+    where: { clientId, active: true, validFrom: { lte: on }, validTo: { gte: on } },
+    orderBy: { validFrom: 'desc' },
+    select: {
+      id: true,
+      name: true,
+      services: {
+        where: { additionalService: { active: true, trigger: 'MANUAL' } },
+        orderBy: { additionalService: { sortOrder: 'asc' } },
+        select: {
+          rate: true,
+          additionalService: { select: { id: true, name: true, defaultRate: true } },
+        },
+      },
+      // The service levels this card actually prices. A level only has a price
+      // through a route rate, so "their levels" are the ones that appear in one.
+      rates: {
+        where: { active: true, serviceLevel: { active: true } },
+        select: { serviceLevel: { select: { id: true, name: true, sortOrder: true } } },
+      },
+    },
+  });
+  return card;
+}
+
+export function findActiveServicesByIds(ids: string[]) {
+  return prisma.additionalService.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, name: true, active: true, trigger: true },
+  });
+}
+
+export function findFreightItemById(id: string) {
+  return prisma.freightItem.findUnique({
     where: { id },
     select: { id: true, name: true, active: true },
   });
@@ -181,7 +283,16 @@ export async function clientReferenceTaken(
 export function findForUpdate(id: string) {
   return prisma.consignment.findUnique({
     where: { id },
-    select: { id: true, clientId: true, clientReference: true, status: true, driverId: true },
+    // `orderNo` is here because it is the fallback reference: clearing the
+    // reference box writes the order number rather than null.
+    select: {
+      id: true,
+      orderNo: true,
+      clientId: true,
+      clientReference: true,
+      status: true,
+      driverId: true,
+    },
   });
 }
 

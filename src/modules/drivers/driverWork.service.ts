@@ -37,9 +37,12 @@ function withNextAction(row: DriverConsignmentRow) {
    * `hasReleaseLetter` is kept because the deployed app reads it; `documentKinds`
    * is what a new build should use, since there are two kinds now.
    */
-  const { documents, ...rest } = row;
+  const { documents, customerName, ...rest } = row;
   return {
     ...rest,
+    // A Walk-in order shows the typed customer. The app reads `client.name`,
+    // so the substitution happens here and the deployed build needs no change.
+    client: { name: customerName ?? rest.client.name },
     hasReleaseLetter: documents.some((d) => d.kind === 'RELEASE_LETTER'),
     documentKinds: documents.map((d) => d.kind),
     nextAction: NEXT_ACTION[row.status] ?? 'NONE',

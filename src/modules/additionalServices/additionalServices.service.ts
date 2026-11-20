@@ -1,7 +1,7 @@
 import { AppError } from '../../utils/httpError.js';
 import type {
-  CreateCatalogEntryInput,
-  UpdateCatalogEntryInput,
+  CreateAdditionalServiceInput,
+  UpdateAdditionalServiceInput,
 } from '../../schemas/catalog.schema.js';
 import * as repo from './additionalServices.repository.js';
 
@@ -23,6 +23,16 @@ function toDto(row: repo.EntryRow) {
     name: row.name,
     active: row.active,
     sortOrder: row.sortOrder,
+    /** Decimal to number for JSON; null means "no standard price". */
+    defaultRate: row.defaultRate === null ? null : Number(row.defaultRate.toString()),
+    trigger: row.trigger,
+    /** Always present, even on a manual charge, so the console needs no null check. */
+    hours: {
+      weekdayFrom: row.weekdayFrom,
+      weekdayTo: row.weekdayTo,
+      weekendFrom: row.weekendFrom,
+      weekendTo: row.weekendTo,
+    },
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -46,22 +56,43 @@ async function assertNameFree(name: string, exceptId?: string) {
   }
 }
 
-export async function createAdditionalService(input: CreateCatalogEntryInput) {
+export async function createAdditionalService(input: CreateAdditionalServiceInput) {
   await assertNameFree(input.name);
   const sortOrder = input.sortOrder ?? (await repo.nextSortOrder());
-  return toDto(await repo.create({ name: input.name, sortOrder }));
+  return toDto(
+    await repo.create({
+      name: input.name,
+      sortOrder,
+      ...(input.defaultRate !== undefined ? { defaultRate: input.defaultRate } : {}),
+    }),
+  );
 }
 
-export async function updateAdditionalService(id: string, input: UpdateCatalogEntryInput) {
+export async function updateAdditionalService(id: string, input: UpdateAdditionalServiceInput) {
   const existing = await repo.findById(id);
   if (!existing) throw AppError.notFound('Additional service not found');
   if (input.name !== undefined) await assertNameFree(input.name, id);
+
+  // Hours only mean something to a charge the system applies by itself; on a
+  // charge an operator ticks they would be a setting that silently does nothing.
+  if (input.hours !== undefined && existing.trigger === 'MANUAL') {
+    throw AppError.badRequest('Only a system-added charge keeps business hours');
+  }
 
   return toDto(
     await repo.update(id, {
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {}),
       ...(input.active !== undefined ? { active: input.active } : {}),
+      ...(input.defaultRate !== undefined ? { defaultRate: input.defaultRate } : {}),
+      ...(input.hours !== undefined
+        ? {
+            weekdayFrom: input.hours?.weekdayFrom ?? null,
+            weekdayTo: input.hours?.weekdayTo ?? null,
+            weekendFrom: input.hours?.weekendFrom ?? null,
+            weekendTo: input.hours?.weekendTo ?? null,
+          }
+        : {}),
     }),
   );
 }
@@ -69,5 +100,10 @@ export async function updateAdditionalService(id: string, input: UpdateCatalogEn
 export async function deleteAdditionalService(id: string) {
   const existing = await repo.findById(id);
   if (!existing) throw AppError.notFound('Additional service not found');
+  // The automatic charge is part of how pricing works rather than something
+  // somebody chose to add, so it is hidden, never deleted out from under a card.
+  if (existing.trigger !== 'MANUAL') {
+    throw AppError.conflict('A system-added charge cannot be deleted; switch it off instead');
+  }
   await repo.remove(id);
 }

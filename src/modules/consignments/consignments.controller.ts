@@ -19,6 +19,24 @@ function idOf(req: Request): string {
   return (req.params as unknown as { id: string }).id;
 }
 
+/**
+ * Strip the operators' internal note before an order reaches a driver.
+ *
+ * `generalNote` is "Operator notes" in the console — written for the
+ * operations team, not the person at the door. The assigned driver can reach
+ * an order through two routes here (read, and the manual status steps), so the
+ * redaction happens at the edge rather than trusting every app build to not
+ * render it: a field that is sent can be read off the network by anyone.
+ *
+ * Pickup and drop notes are untouched — those are written FOR the driver.
+ */
+function forViewer(req: Request, dto: object): object {
+  if (req.user?.role !== 'driver') return dto;
+  const copy: Record<string, unknown> = { ...dto };
+  delete copy.generalNote;
+  return copy;
+}
+
 export const create = asyncHandler(async (req, res) => {
   const created = await service.createConsignment(req.body, actorOf(req));
   res.status(201).json(created);
@@ -30,7 +48,7 @@ export const list = asyncHandler(async (req, res) => {
 });
 
 export const getOne = asyncHandler(async (req, res) => {
-  res.status(200).json(await service.getConsignment(idOf(req)));
+  res.status(200).json(forViewer(req, await service.getConsignment(idOf(req))));
 });
 
 export const update = asyncHandler(async (req, res) => {
@@ -40,7 +58,7 @@ export const update = asyncHandler(async (req, res) => {
 
 export const changeStatus = asyncHandler(async (req, res) => {
   const updated = await service.changeStatus(idOf(req), req.body, actorOf(req));
-  res.status(200).json(updated);
+  res.status(200).json(forViewer(req, updated));
 });
 
 export const assignBulk = asyncHandler(async (req, res) => {
@@ -58,4 +76,8 @@ export const assign = asyncHandler(async (req, res) => {
 export const unassign = asyncHandler(async (req, res) => {
   const updated = await service.unassignDriver(idOf(req), actorOf(req));
   res.status(200).json(updated);
+});
+
+export const servicesForClient = asyncHandler(async (req, res) => {
+  res.status(200).json(await service.listServicesForClient(req.params.clientId as string));
 });

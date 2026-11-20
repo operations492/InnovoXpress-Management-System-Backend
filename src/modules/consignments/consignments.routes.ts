@@ -45,6 +45,20 @@ router.use(authenticate);
 // progression (Feature 4) mount here later.
 router.post('/', requireMinRole('operator'), validate(createConsignmentSchema), controller.create);
 
+/*
+ * What this customer can be charged on top of the freight, for the order
+ * form's tick-list. Before `/:id`, or "services" is read as an order id.
+ *
+ * It lives here rather than under /api/clients because the question is asked
+ * while logging an order, and the answer depends on the rate card in force
+ * today — nothing a client record knows on its own.
+ */
+router.get(
+  '/services/:clientId',
+  requireMinRole('operator'),
+  controller.servicesForClient,
+);
+
 // Reads are operator+ as well as writes. `authenticate` alone is not enough:
 // a driver token is authenticated too, and drivers must not be able to read the
 // whole book of work — especially while driver sign-in has no password.

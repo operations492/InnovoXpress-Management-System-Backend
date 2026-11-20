@@ -18,10 +18,12 @@ const SQL_FILES = [
   'positions.sql',
   'routes.sql',
   'pod.sql',
-  // Plain columns again, and here for the same reason as pod.sql: `prisma db
-  // push` cannot be run against this database.
   'push.sql',
   'avatar.sql',
+  'invoices.sql',
+  'consignmentServices.sql',
+  'walkIn.sql',
+  'invoiceSends.sql',
 ];
 
 /**

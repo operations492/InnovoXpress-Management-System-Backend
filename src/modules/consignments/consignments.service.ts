@@ -116,14 +116,85 @@ async function resolveServiceLevel(id: string) {
   return level;
 }
 
+/**
+ * Unlike the service level, an inactive freight item is accepted.
+ *
+ * Retiring a freight type must not block logging an order that genuinely
+ * contains one; the rate card decides what it costs, and a retired type simply
+ * stops being offered in new dropdowns.
+ */
+/**
+ * Check every ticked charge before any of them is stored.
+ *
+ * Two refusals, for different reasons. An inactive charge is a retired one
+ * nobody should be attaching to new work. An AFTER_HOURS charge is decided by
+ * the system from the requested times, so letting an operator tick it by hand
+ * would let the two disagree about the same job.
+ */
+async function resolveServices(ids: string[]) {
+  const unique = [...new Set(ids)];
+  if (unique.length === 0) return [];
+
+  const found = await repo.findActiveServicesByIds(unique);
+  if (found.length !== unique.length) {
+    throw AppError.badRequest('One of those additional services does not exist');
+  }
+
+  const retired = found.find((s) => !s.active);
+  if (retired) {
+    throw AppError.badRequest(`"${retired.name}" is no longer offered`);
+  }
+
+  const automatic = found.find((s) => s.trigger !== 'MANUAL');
+  if (automatic) {
+    throw AppError.badRequest(`"${automatic.name}" is added by the system and cannot be ticked`);
+  }
+
+  return unique;
+}
+
+/**
+ * Who an order belongs to: a picked client, or the Walk-in account with
+ * whatever name the operator typed.
+ *
+ * `customerName` survives only on Walk-in orders. On a named client it would be
+ * a second, competing answer to "whose order is this", so it is dropped. A
+ * blank name is stored as null — Walk-in with no name — rather than "".
+ */
+async function resolveCustomer(clientId: string | undefined, customerName: string | null | undefined) {
+  const typed = customerName?.trim() || null;
+
+  if (clientId) {
+    const client = await repo.findClientById(clientId);
+    if (!client) throw AppError.badRequest('Unknown client');
+    if (!client.active) throw AppError.badRequest(`Client "${client.name}" is inactive`);
+    return { client, customerName: client.code === repo.WALK_IN.code ? typed : null };
+  }
+
+  const client = await repo.findOrCreateWalkInClient();
+  return { client, customerName: typed };
+}
+
+async function resolveFreightItem(id: string) {
+  const item = await repo.findFreightItemById(id);
+  if (!item) throw AppError.badRequest('Unknown freight item');
+  return item;
+}
+
 function toSummary(row: repo.SummaryRow) {
   return {
     id: row.id,
     orderNo: row.orderNo,
     clientReference: row.clientReference,
     client: row.client,
+    /** Set only on Walk-in orders. Show `customerName ?? client.name`. */
+    customerName: row.customerName,
     driver: row.driver,
     serviceLevel: row.serviceLevel,
+    freightItem: row.freightItem,
+    // A count, not the names: the grid shows a chip, and pulling every name
+    // for every row would cost a join per page to render "2".
+    additionalServiceCount: row._count.services,
     status: row.status,
     statusLabel: STATUS_LABELS[row.status],
     priority: row.priority,
@@ -157,8 +228,12 @@ function toDetail(c: repo.FullConsignment) {
     orderNo: c.orderNo,
     clientReference: c.clientReference,
     client: c.client,
+    /** Set only on Walk-in orders. Show `customerName ?? client.name`. */
+    customerName: c.customerName,
     driver: c.driver,
     serviceLevel: c.serviceLevel,
+    freightItem: c.freightItem,
+    additionalServices: c.services.map((s) => s.additionalService),
     status: c.status,
     statusLabel: STATUS_LABELS[c.status],
     priority: c.priority,
@@ -235,18 +310,25 @@ function toDetail(c: repo.FullConsignment) {
 // ---------------------------------------------------------------------------
 
 export async function createConsignment(input: CreateConsignmentInput, actor: Actor) {
-  const client = await repo.findClientById(input.clientId);
-  if (!client) throw AppError.badRequest('Unknown client');
-  if (!client.active) throw AppError.badRequest(`Client "${client.name}" is inactive`);
+  // No client picked is allowed: the order goes to Walk-in under the typed name.
+  const { client, customerName } = await resolveCustomer(input.clientId, input.customerName);
 
   const serviceLevel = input.serviceLevelId ? await resolveServiceLevel(input.serviceLevelId) : null;
+  const freightItem = input.freightItemId ? await resolveFreightItem(input.freightItemId) : null;
+  const serviceIds = await resolveServices(input.additionalServiceIds ?? []);
+
+  // An empty box is not a value. Trim it away before anything looks at it,
+  // otherwise the first blank order stores "" and the second one collides on the
+  // composite unique index with an unreadable "Duplicate value for clientId,
+  // clientReference".
+  const supplied = input.clientReference?.trim() || undefined;
 
   // Pre-check for a readable message; the composite unique index is the real guard.
-  if (input.clientReference) {
-    const taken = await repo.clientReferenceTaken(client.id, input.clientReference);
+  if (supplied) {
+    const taken = await repo.clientReferenceTaken(client.id, supplied);
     if (taken) {
       throw AppError.conflict(
-        `Reference "${input.clientReference}" is already used by another ${client.name} order`,
+        `Reference "${supplied}" is already used by another ${client.name} order`,
       );
     }
   }
@@ -264,9 +346,14 @@ export async function createConsignment(input: CreateConsignmentInput, actor: Ac
 
   const created = await repo.createConsignment({
       orderNo,
-      clientReference: input.clientReference ?? null,
+      // Left blank, the order number becomes the reference: it is already
+      // unique within the client and readable, so the column is never empty
+      // and no second identifier format has to be invented.
+      clientReference: supplied ?? orderNo,
       client: { connect: { id: client.id } },
+      customerName,
       ...(serviceLevel ? { serviceLevel: { connect: { id: serviceLevel.id } } } : {}),
+      ...(freightItem ? { freightItem: { connect: { id: freightItem.id } } } : {}),
       status: ConsignmentStatus.UNASSIGNED,
       priority: input.priority,
       taskType: input.taskType,
@@ -280,6 +367,9 @@ export async function createConsignment(input: CreateConsignmentInput, actor: Ac
       createdByUserId: actor.id,
       lastUpdatedByUserId: actor.id,
       items: { create: input.items.map(itemColumns) },
+      // Names only. What each one costs is the rate card's business, read when
+      // the job is invoiced rather than frozen at the moment it was logged.
+      services: { create: serviceIds.map((id) => ({ additionalServiceId: id })) },
       trackingEvents: {
         create: {
           fromStatus: null,
@@ -627,19 +717,30 @@ export async function updateConsignment(
   // Moving the order to another client: the target must exist and be active, the
   // same checks a create makes. The order number keeps its original prefix — it
   // is an identifier already printed on labels, not a description of the client.
+  //
+  // Either field present means "this is who the order belongs to now". A
+  // clientId wins; a customerName on its own moves the order to Walk-in under
+  // that name. Neither present leaves the customer exactly as it was.
   let clientId = existing.clientId;
-  if (input.clientId !== undefined && input.clientId !== existing.clientId) {
-    const client = await repo.findClientById(input.clientId);
-    if (!client) throw AppError.badRequest('Unknown client');
-    if (!client.active) throw AppError.badRequest(`Client "${client.name}" is inactive`);
-    clientId = client.id;
+  let customerName: string | null | undefined;
+  if (input.clientId !== undefined || input.customerName !== undefined) {
+    const resolved = await resolveCustomer(input.clientId, input.customerName);
+    clientId = resolved.client.id;
+    customerName = resolved.customerName;
   }
 
   // References are unique per client, so a client change re-checks the order's
   // existing reference against the new client's orders.
-  const clientReference =
-    input.clientReference !== undefined ? input.clientReference : existing.clientReference;
-  if (clientReference && (input.clientReference || clientId !== existing.clientId)) {
+  //
+  // Clearing the box does not clear the column: a blank reference is exactly what
+  // the order number is for, so a blank (or an explicit null) falls back to it.
+  // That keeps "every order has a reference" true for rows edited after creation.
+  const supplied =
+    input.clientReference === undefined
+      ? undefined
+      : input.clientReference?.trim() || existing.orderNo;
+  const clientReference = supplied ?? existing.clientReference;
+  if (clientReference && (supplied || clientId !== existing.clientId)) {
     const taken = await repo.clientReferenceTaken(clientId, clientReference, id);
     if (taken) {
       throw AppError.conflict(
@@ -651,13 +752,20 @@ export async function updateConsignment(
   const data: Prisma.ConsignmentUpdateInput = { lastUpdatedByUserId: actor.id };
 
   if (clientId !== existing.clientId) data.client = { connect: { id: clientId } };
+  if (customerName !== undefined) data.customerName = customerName;
   if (input.serviceLevelId === null) {
     data.serviceLevel = { disconnect: true };
   } else if (input.serviceLevelId !== undefined) {
     const level = await resolveServiceLevel(input.serviceLevelId);
     data.serviceLevel = { connect: { id: level.id } };
   }
-  if (input.clientReference !== undefined) data.clientReference = input.clientReference;
+  if (input.freightItemId === null) {
+    data.freightItem = { disconnect: true };
+  } else if (input.freightItemId !== undefined) {
+    const item = await resolveFreightItem(input.freightItemId);
+    data.freightItem = { connect: { id: item.id } };
+  }
+  if (supplied !== undefined) data.clientReference = supplied;
   if (input.taskType !== undefined) data.taskType = input.taskType;
   if (input.priority !== undefined) data.priority = input.priority;
   if (input.pickupAfter !== undefined) data.pickupAfter = input.pickupAfter;
@@ -668,13 +776,67 @@ export async function updateConsignment(
   if (input.sender) Object.assign(data, senderColumns(input.sender));
   if (input.receiver) Object.assign(data, receiverColumns(input.receiver));
 
+  // Validated before the order itself is touched, so a bad tick cannot leave
+  // the consignment half-updated.
+  const serviceIds =
+    input.additionalServiceIds === undefined
+      ? null
+      : await resolveServices(input.additionalServiceIds);
+
   await repo.updateConsignmentTx({
     id,
     data,
     items: input.items?.map((i) => ({ id: i.id, columns: itemColumns(i) })),
   });
 
+  // Replaces the whole set, including with nothing: the form sends the
+  // tick-list as it stands, so an empty array legitimately means "none left".
+  if (serviceIds !== null) await repo.replaceServices(id, serviceIds);
+
   return getConsignment(id);
+}
+
+/**
+ * The accessorials this customer can be charged — their rate card's manual
+ * ones, with what each would cost today.
+ *
+ * Empty, with the reason, when they have no active card: offering charges
+ * nobody has agreed a price for is how a job gets billed at zero.
+ */
+export async function listServicesForClient(clientId: string) {
+  const client = await repo.findClientById(clientId);
+  if (!client) throw AppError.notFound('Client not found');
+
+  const card = await repo.findServicesForClient(clientId, new Date());
+  if (!card) {
+    return {
+      rateCard: null,
+      problem: `${client.name} has no active rate card today, so no charges can be priced.`,
+      services: [],
+      serviceLevels: [],
+    };
+  }
+
+  return {
+    rateCard: { id: card.id, name: card.name },
+    problem: null,
+    services: card.services.map((s) => ({
+      id: s.additionalService.id,
+      name: s.additionalService.name,
+      // The card's own price when there is one, else the catalogue's.
+      rate: Number(s.rate ?? s.additionalService.defaultRate ?? 0),
+      override: s.rate !== null,
+    })),
+    /*
+     * Each level once, in catalogue order. A card holds one rate per level per
+     * freight item per zone, so the same level appears many times in `rates`.
+     * No price is attached: a level's price depends on the zone and freight,
+     * which are not known until the order is filled in.
+     */
+    serviceLevels: [...new Map(card.rates.map((r) => [r.serviceLevel.id, r.serviceLevel])).values()]
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))
+      .map((l) => ({ id: l.id, name: l.name })),
+  };
 }
 
 /** The batch counterpart of `notifyAssigned` — one message, whatever the count. */

@@ -97,10 +97,19 @@ model Client {
   /// "Use loading dock 4, ring first." Becomes senderInstructions.
   instructions String?
 
+  // --- billing ---
+  /// No sales tax on this client's invoices. Not a rate of zero: a rate belongs
+  /// to the jurisdiction, while exemption belongs to the customer, and the two
+  /// change for different reasons. Interliners like Purolator sit here.
+  taxExempt        Boolean @default(false)
+  /// Days from invoice date to due date. 30 unless agreed otherwise.
+  paymentTermsDays Int     @default(30)
+
   consignments  Consignment[]
   orderCounters OrderCounter[]
 
-  ratePlans RatePlan[]
+  rateCards RateCard[]
+  invoices  Invoice[]
 
   @@map("clients")
 }
@@ -125,10 +134,21 @@ model ServiceLevel {
 
   consignments Consignment[]
 
-  ratePlanItems RatePlanItem[]
+  routeRates RouteRate[]
 
   @@index([active, sortOrder])
   @@map("service_levels")
+}
+
+/// How a charge reaches a job.
+///
+/// `MANUAL` is the ordinary kind: an operator ticks it on the order. `AFTER_HOURS`
+/// is applied by the system from the job's own time, so it is never offered as a
+/// tick box and nobody can create one — a partial unique index in the database
+/// allows exactly one, because two would bill the same evening twice.
+enum ServiceTrigger {
+  MANUAL
+  AFTER_HOURS
 }
 
 /// A priced extra an order can carry — "Tailgate", "Inside Delivery", "Wait Time".
@@ -145,10 +165,51 @@ model AdditionalService {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  ratePlanItems RatePlanItem[]
+  /// What this charge is worth before any customer negotiates it: one flat
+  /// amount. Null means "no standard price" — it must be priced per card.
+  defaultRate Decimal? @db.Decimal(12, 2)
+
+  /// MANUAL unless the system decides this charge for itself.
+  trigger ServiceTrigger @default(MANUAL)
+
+  /// Normal business hours as "HH:MM", local time, and the thing an automatic
+  /// charge measures a job against. Each window is stored as a pair or not at
+  /// all; null means the hours were never set, so nothing can be outside them.
+  weekdayFrom String?
+  weekdayTo   String?
+  weekendFrom String?
+  weekendTo   String?
+
+  cardServices RateCardService[]
+  onOrders     ConsignmentService[]
 
   @@index([active, sortOrder])
   @@map("additional_services")
+}
+
+/// An accessorial attached to one order — "this job needed a tailgate".
+///
+/// A join table and not a column, because an order can need several of them.
+/// It names the charge only and never the amount: the price is whatever the
+/// customer's rate card says on the day the job is invoiced, so a renegotiated
+/// rate is picked up automatically and nothing stored here has to be rewritten.
+model ConsignmentService {
+  id String @id @default(cuid())
+
+  consignmentId String
+  consignment   Consignment @relation(fields: [consignmentId], references: [id], onDelete: Cascade)
+
+  /// Restrict: a charge that has been applied to real work cannot be deleted
+  /// out from under it, only deactivated — the rule service levels follow.
+  additionalServiceId String
+  additionalService   AdditionalService @relation(fields: [additionalServiceId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  /// Ticking the same box twice is one charge, not two.
+  @@unique([consignmentId, additionalServiceId])
+  @@index([consignmentId])
+  @@map("consignment_services")
 }
 
 /// What is carried, as a priceable *type* — "Skid", "Carton", "Envelope".
@@ -164,7 +225,8 @@ model FreightItem {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  ratePlanItems RatePlanItem[]
+  routeRates   RouteRate[]
+  consignments Consignment[]
 
   @@index([active, sortOrder])
   @@map("freight_items")
@@ -371,6 +433,13 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /// Two separate relations on purpose: raising an invoice and approving one are
+  /// different acts by (usually) different people, and an audit trail that
+  /// cannot tell them apart is not an audit trail.
+  invoicesCreated  Invoice[] @relation("InvoiceCreatedBy")
+  invoicesApproved Invoice[] @relation("InvoiceApprovedBy")
+  invoicesSent     InvoiceSend[] @relation("InvoiceSentBy")
+
   @@index([role])
   @@map("users")
 }
@@ -396,6 +465,15 @@ model Consignment {
   clientId String
   client   Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
 
+  /// The customer as typed, for an order logged without picking a client.
+  ///
+  /// Such orders still belong to a real client row — the built-in Walk-in
+  /// account (code WLK) — so the order number, the reference rule and every
+  /// query that joins a client keep working. This column carries the name the
+  /// operator actually typed, and is null whenever the order belongs to a
+  /// named client. Display rule everywhere: customerName ?? client.name.
+  customerName String?
+
   /// Restrict (not SetNull): the consignments_driver_status_agree CHECK constraint
   /// requires driverId to be non-null for every non-UNASSIGNED order, so silently
   /// nulling a driver would corrupt in-flight work.
@@ -409,6 +487,16 @@ model Consignment {
   /// Restrict: a level in use cannot be deleted, only deactivated.
   serviceLevelId String?
   serviceLevel   ServiceLevel? @relation(fields: [serviceLevelId], references: [id], onDelete: Restrict)
+
+  /// What is being carried — "Parcel", "Skid". Half of the rate card's price key
+  /// alongside the service level and the destination zone.
+  ///
+  /// Nullable on purpose. Matching is deliberately loose: a rate whose service
+  /// level and zone match still applies when this is empty, because the item
+  /// table is barely involved in pricing and refusing to quote would be worse
+  /// than quoting the one rate that fits. Restrict, like the service level.
+  freightItemId String?
+  freightItem   FreightItem? @relation(fields: [freightItemId], references: [id], onDelete: Restrict)
 
   // --- sender (pickup) snapshot ---
   senderName         String
@@ -485,9 +573,14 @@ model Consignment {
   documents      OrderDocument[]
   /// Places this order holds on planned routes.
   routeStops     RouteStop[]
+  /// At most one: a job belongs to one invoice or to none.
+  invoiceLine    InvoiceLine?
+  /// Accessorials an operator ticked for this job. Names only, never prices.
+  services       ConsignmentService[]
 
   @@unique([clientId, clientReference])
   @@index([clientId, status])
+  @@index([freightItemId])
   @@index([driverId, status])
   @@index([serviceLevelId])
   @@index([status])
@@ -858,72 +951,6 @@ enum SequenceSource {
 // Rating
 // ---------------------------------------------------------------------------
 
-/// A price list belonging to one client.
-///
-/// The base-rate fields are the rate builder's first tab: `baseRate` covers the
-/// first `includedKm`, and every further `blockKm` costs `blockRate`. Blocks are
-/// charged whole, so with 25 km included and 25 km blocks a 51 km job pays two
-/// blocks, not 1.04 — the quote prints that arithmetic rather than hiding it.
-///
-/// One plan per client may be active at a time (partial unique index), so there
-/// is never a question about which price applied. Retired plans stay for
-/// reference.
-model RatePlan {
-  id       String @id @default(cuid())
-  clientId String
-  client   Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
-
-  name     String
-  active   Boolean @default(true)
-  currency String  @default("CAD")
-
-  /// Money is Decimal, never Float: a cent of drift per line becomes a
-  /// reconciliation argument at month end.
-  baseRate   Decimal @default(0) @db.Decimal(12, 2)
-  includedKm Int     @default(0)
-  /// Must be > 0 (CHECK) — the quote divides by it.
-  blockKm    Int     @default(25)
-  blockRate  Decimal @default(0) @db.Decimal(12, 2)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  items RatePlanItem[]
-
-  @@index([clientId, active])
-  @@map("rate_plans")
-}
-
-/// One priced catalogue entry inside a plan.
-///
-/// Exactly one of the three ids is set (CHECK), which keeps real foreign keys
-/// while leaving one table, one CRUD and one grid in the UI. A missing row means
-/// "not priced for this client" — distinct from a row priced at 0, which means
-/// deliberately free. The quote warns about the first and bills the second.
-model RatePlanItem {
-  id         String   @id @default(cuid())
-  ratePlanId String
-  ratePlan   RatePlan @relation(fields: [ratePlanId], references: [id], onDelete: Cascade)
-
-  serviceLevelId      String?
-  serviceLevel        ServiceLevel?      @relation(fields: [serviceLevelId], references: [id], onDelete: Restrict)
-  additionalServiceId String?
-  additionalService   AdditionalService? @relation(fields: [additionalServiceId], references: [id], onDelete: Restrict)
-  freightItemId       String?
-  freightItem         FreightItem?       @relation(fields: [freightItemId], references: [id], onDelete: Restrict)
-
-  price Decimal @db.Decimal(12, 2)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([ratePlanId, serviceLevelId])
-  @@unique([ratePlanId, additionalServiceId])
-  @@unique([ratePlanId, freightItemId])
-  @@index([ratePlanId])
-  @@map("rate_plan_items")
-}
-
 // ---------------------------------------------------------------------------
 // Order documents  (release letter / bill of lading, shown and signed per leg)
 // ---------------------------------------------------------------------------
@@ -1010,4 +1037,428 @@ model OrderDocumentSignature {
   @@unique([documentId, leg])
   @@index([documentId])
   @@map("order_document_signatures")
+}
+
+/// Where a postal code came from. The distinction exists so redrawing a shape can
+/// replace every code the map produced without touching one somebody typed.
+enum ZoneCodeSource {
+  TYPED
+  MAP
+}
+
+/// Three characters (an FSA, `M5V`) or all six (`T2E6W5`). Derived from length on
+/// the way in and stored, so no query has to measure a string to know which it is.
+enum ZoneCodeType {
+  FSA
+  FULL
+}
+
+/// A named set of zones, e.g. "Apple Express Zones".
+///
+/// A rate card points at one list rather than at zones directly, so two customers
+/// can carve the same city up differently without either seeing the other's map.
+model ZoneList {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  active      Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  zones     Zone[]
+  rules     ZonePostalRule[]
+  rateCards RateCard[]
+
+  @@map("zone_lists")
+}
+
+/// One place inside a list - Toronto, Timmins, Vancouver.
+model Zone {
+  id         String   @id @default(cuid())
+  zoneListId String
+  zoneList   ZoneList @relation(fields: [zoneListId], references: [id], onDelete: Cascade)
+
+  name      String
+  shortName String?
+  /// Deleting is deactivating: a zone named on a priced route must not vanish.
+  active    Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rules     ZonePostalRule[]
+  shape     ZoneMapShape?
+  toRates   RouteRate[]
+
+  @@unique([zoneListId, name])
+  @@index([zoneListId, active])
+  @@map("zones")
+}
+
+/// One postal code belonging to one zone.
+///
+/// `zoneListId` is copied down from the zone so the rule that matters - a code
+/// may appear in only ONE zone of a list - is a plain unique index instead of a
+/// trigger. A six-character code deliberately coexists with its own FSA in a
+/// different zone: that is how an airport gets carved out of the city around it.
+model ZonePostalRule {
+  id         String   @id @default(cuid())
+  zoneId     String
+  zone       Zone     @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+  zoneListId String
+  zoneList   ZoneList @relation(fields: [zoneListId], references: [id], onDelete: Cascade)
+
+  /// Upper case, no spaces, three characters or six. Nothing else is stored.
+  code     String
+  codeType ZoneCodeType
+  source   ZoneCodeSource @default(TYPED)
+
+  createdAt DateTime @default(now())
+
+  @@unique([zoneListId, code])
+  @@index([zoneId])
+  @@map("zone_postal_rules")
+}
+
+/// The polygon somebody drew, kept only so it can be shown and redrawn.
+///
+/// Pricing never reads it. The codes it produced are the whole of its output,
+/// which is why deleting this row cannot change a price.
+model ZoneMapShape {
+  id     String @id @default(cuid())
+  zoneId String @unique
+  zone   Zone   @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+
+  /// GeoJSON polygon, WGS84, longitude first.
+  geojson Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("zone_map_shapes")
+}
+
+/// A customer's price book over one zone list, for one window of dates.
+///
+/// One customer per card. Two cards for the same customer may not overlap in
+/// time, so "what did this customer pay that day" has exactly one answer.
+model RateCard {
+  id       String @id @default(cuid())
+  name     String
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+
+  zoneListId String
+  zoneList   ZoneList @relation(fields: [zoneListId], references: [id], onDelete: Restrict)
+
+  validFrom DateTime @db.Date
+  validTo   DateTime @db.Date
+  currency  String   @default("CAD")
+  active    Boolean  @default(true)
+  memo      String?
+
+  /// A surcharge on the base price only — never on the additional services.
+  /// Stored as a percentage (50 means 50%), 0 means the card carries no levy.
+  levyPct Decimal @default(0) @db.Decimal(5, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rates    RouteRate[]
+  services RateCardService[]
+  /// SetNull, not Cascade: deleting a card must never delete invoice history.
+  invoiceLines InvoiceLine[]
+
+  @@index([clientId, active])
+  @@map("rate_cards")
+}
+
+/// The five numbers for one exact combination: card + service level + freight
+/// item + destination zone.
+///
+/// Only where a job is *going* decides its price. Where it was collected used to
+/// be half the key; it bought lane pricing nobody used and made every screen ask
+/// for an origin before it could show a number.
+model RouteRate {
+  id         String   @id @default(cuid())
+  rateCardId String
+  rateCard   RateCard @relation(fields: [rateCardId], references: [id], onDelete: Cascade)
+
+  serviceLevelId String
+  serviceLevel   ServiceLevel @relation(fields: [serviceLevelId], references: [id], onDelete: Restrict)
+  freightItemId  String
+  freightItem    FreightItem  @relation(fields: [freightItemId], references: [id], onDelete: Restrict)
+
+  toZoneId String
+  toZone   Zone   @relation(fields: [toZoneId], references: [id], onDelete: Restrict)
+
+  /// Money is Decimal, never Float: a cent of drift per line becomes a
+  /// reconciliation argument at month end.
+  baseRate          Decimal @default(0) @db.Decimal(12, 2)
+  /// Distance covered by the base rate; only the kilometres beyond it are billed.
+  freeKm            Decimal @default(0) @db.Decimal(8, 2)
+  ratePerKm         Decimal @default(0) @db.Decimal(12, 4)
+  /// Free waiting applies once per job, not once per stop.
+  freeWaitMinutes   Int     @default(0)
+  waitRatePerMinute Decimal @default(0) @db.Decimal(12, 4)
+
+  active Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([rateCardId, serviceLevelId, freightItemId, toZoneId])
+  @@index([rateCardId])
+  @@map("route_rates")
+}
+
+/// One customer's price for one additional service.
+///
+/// A row exists only where this card departs from the catalogue default, so the
+/// absence of a row is itself the answer: "charge the standard price". That is
+model RateCardService {
+  id         String   @id @default(cuid())
+  rateCardId String
+  rateCard   RateCard @relation(fields: [rateCardId], references: [id], onDelete: Cascade)
+
+  additionalServiceId String
+  additionalService   AdditionalService @relation(fields: [additionalServiceId], references: [id], onDelete: Restrict)
+
+  /// This customer's flat price. Null is never stored: the row is deleted
+  /// instead, so 'same as standard' has exactly one representation.
+  rate Decimal @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([rateCardId, additionalServiceId])
+  @@index([rateCardId])
+  @@map("rate_card_services")
+}
+
+// ---------------------------------------------------------------------------
+// Invoicing
+//
+// The rate card decides what a job *would* cost. An invoice records what it
+// *did* cost, and from the moment a job lands on one the two part company:
+// every percentage and every amount is snapshotted, so editing a rate card
+// tomorrow can never rewrite an invoice sent yesterday.
+// ---------------------------------------------------------------------------
+
+/// Three states, forward and back. OPEN and CLOSED differ in exactly one way —
+/// whether consignments may join or leave — so a biller can stop the intake and
+/// still fix the numbers. APPROVED freezes everything.
+enum InvoiceStatus {
+  OPEN
+  CLOSED
+  APPROVED
+}
+
+/// What a price line *is*, as opposed to what it is called. The label is for
+/// the operator; this is what the arithmetic keys off, which is why a renamed
+/// levy still behaves like a levy.
+enum PriceLineKind {
+  BASE
+  DISTANCE
+  WAITING
+  SERVICE
+  LEVY
+  TAX
+  /// Typed in by an operator for something the rate card cannot express.
+  /// Treated as an additional service by the levy rule, i.e. not levied.
+  MANUAL
+}
+
+model Invoice {
+  id String @id @default(cuid())
+
+  /// Allocated from `FinanceSetting.invoiceNextNumber` by one atomic update
+  /// taken *outside* the insert transaction, the same way order numbers are.
+  /// Holding that lock across a transaction makes concurrent creates queue and
+  /// time out. A failed insert burns a number; gaps are fine.
+  number String @unique
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+
+  /// The date printed on the invoice, and the date the terms count from.
+  invoiceDate DateTime
+  /// invoiceDate + client.paymentTermsDays, computed once and then stored:
+  /// changing a client's terms must not silently move an issued due date.
+  dueDate     DateTime
+
+  status InvoiceStatus @default(OPEN)
+
+  /// Copied from the rate card that priced the first line. No conversion
+  /// happens anywhere; an invoice is single-currency by construction.
+  currency String @default("CAD")
+
+  /// Snapshot of the tax rate in force when this invoice was raised. Zero for
+  /// an exempt client. Stored rather than read back from settings, because a
+  /// rate change is a fact about the future, not about invoices already sent.
+  taxPct Decimal @default(0) @db.Decimal(5, 2)
+
+  createdById String
+  createdBy   User   @relation("InvoiceCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  /// Null exactly while the invoice is not APPROVED. Un-approving clears both,
+  /// so the pair can never claim an approval that was withdrawn.
+  approvedById String?
+  approvedBy   User?     @relation("InvoiceApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  approvedAt   DateTime?
+
+  /// Denormalised totals, recomputed from the lines on every mutation. Stored
+  /// because the list screen shows five money columns across every row, and
+  /// summing three tables per row to paint a grid is how a list page dies.
+  baseTotal    Decimal @default(0) @db.Decimal(12, 2)
+  serviceTotal Decimal @default(0) @db.Decimal(12, 2)
+  levyTotal    Decimal @default(0) @db.Decimal(12, 2)
+  taxTotal     Decimal @default(0) @db.Decimal(12, 2)
+  grandTotal   Decimal @default(0) @db.Decimal(12, 2)
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lines InvoiceLine[]
+  /// Every time the invoice was emailed, newest first when read.
+  sends InvoiceSend[]
+
+  @@index([clientId, status])
+  @@index([invoiceDate])
+  @@index([status])
+  @@map("invoices")
+}
+
+/// One consignment on one invoice, with its money frozen at the moment it
+/// landed there.
+model InvoiceLine {
+  id String @id @default(cuid())
+
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  /// Unique across the whole table, not merely within the invoice: a job may
+  /// appear on one invoice or on none, and the database is the right place to
+  /// say so. Removing it from an invoice deletes the row and returns the job to
+  /// the uninvoiced pool.
+  consignmentId String      @unique
+  consignment   Consignment @relation(fields: [consignmentId], references: [id], onDelete: Restrict)
+
+  /// Which card produced these numbers. Kept for the audit trail only; nothing
+  /// is ever read back through it to re-derive a price.
+  rateCardId String?
+  rateCard   RateCard? @relation(fields: [rateCardId], references: [id], onDelete: SetNull)
+
+  /// Snapshot, so the printed "Levy 27.5%" label is reproducible years later.
+  levyPct Decimal @default(0) @db.Decimal(5, 2)
+
+  /// What the distance and waiting charges were actually worked out from.
+  /// Null means the figure could not be established, which is different from
+  /// zero and prints as blank rather than as "0 km".
+  distanceKm  Decimal? @db.Decimal(10, 2)
+  waitMinutes Int?
+
+  baseAmount    Decimal @default(0) @db.Decimal(12, 2)
+  serviceAmount Decimal @default(0) @db.Decimal(12, 2)
+  levyAmount    Decimal @default(0) @db.Decimal(12, 2)
+  taxAmount     Decimal @default(0) @db.Decimal(12, 2)
+  grandTotal    Decimal @default(0) @db.Decimal(12, 2)
+
+  /// The working, in words — "Apple Express (5 Ton Truck) / Peel<>Niagara /
+  /// 1x15.95=15.95". Written once at pricing time so a biller can see how the
+  /// number was reached without re-running anything.
+  ratingNotes String?
+
+  /// True once an operator overrode an amount by hand. Reprice clears it.
+  edited Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  priceLines InvoicePriceLine[]
+
+  @@index([invoiceId])
+  @@map("invoice_lines")
+}
+
+/// The breakdown beneath one line: the rows the right-hand pane renders and the
+/// printed invoice groups. Deliberately a table rather than JSON, because the
+/// printed totals block groups levies by percentage across the whole invoice,
+/// and that is a query, not a loop over blobs.
+model InvoicePriceLine {
+  id String @id @default(cuid())
+
+  invoiceLineId String
+  invoiceLine   InvoiceLine @relation(fields: [invoiceLineId], references: [id], onDelete: Cascade)
+
+  kind PriceLineKind
+
+  /// Mirrors the quote engine's QuoteLine exactly — 'base', 'distance',
+  /// 'waiting', 'service:<id>', 'levy', 'tax' — so the engine's output drops
+  /// straight in with no translation layer to drift.
+  key    String
+  label  String
+  /// "412 km, 50 free x 1.85". Null when the number speaks for itself.
+  detail String?
+
+  amount Decimal @db.Decimal(12, 2)
+
+  sortOrder Int @default(0)
+
+  /// Only the base-side rows are editable. Levy and tax are percentages of
+  /// something else: letting a person type over them would make the invoice
+  /// disagree with its own arithmetic.
+  editable Boolean @default(false)
+
+  @@index([invoiceLineId, sortOrder])
+  @@map("invoice_price_lines")
+}
+
+/// One email of an invoice: who it went to, who sent it, and when.
+///
+/// A history rather than a "sent" flag on the invoice, because invoices are
+/// re-sent — to a second contact, or after a customer says they never got it —
+/// and "was it sent, to whom, and when" is exactly the question that comes
+/// back weeks later.
+model InvoiceSend {
+  id String @id @default(cuid())
+
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  toEmails String[]
+  ccEmails String[]
+
+  sentById String
+  sentBy   User   @relation("InvoiceSentBy", fields: [sentById], references: [id], onDelete: Restrict)
+
+  /// The mail server's id for the message, for tracing a delivery complaint.
+  messageId String?
+
+  sentAt DateTime @default(now())
+
+  @@index([invoiceId, sentAt])
+  @@map("invoice_sends")
+}
+
+/// Exactly one row, id fixed to 'default'. A settings *table* rather than env
+/// vars because the tax rate and the invoice counter both change at runtime, by
+/// an admin, without a deploy.
+model FinanceSetting {
+  id String @id @default("default")
+
+  /// Sales tax applied to (base + services + levies). 13 is Ontario HST.
+  /// A client marked taxExempt gets 0 regardless.
+  taxPct Decimal @default(13) @db.Decimal(5, 2)
+
+  /// Optional prefix and the next number to hand out, e.g. "" + 1000 -> "1000".
+  invoicePrefix     String @default("")
+  invoiceNextNumber Int    @default(1000)
+
+  updatedAt DateTime @updatedAt
+
+  @@map("finance_settings")
 }

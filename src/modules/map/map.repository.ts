@@ -43,6 +43,7 @@ const pinSelect = {
   senderProvince: true,
   senderCity: true,
   client: { select: { name: true } },
+  customerName: true,
   driver: { select: { id: true, name: true, mapColorIndex: true } },
 } satisfies Prisma.ConsignmentSelect;
 

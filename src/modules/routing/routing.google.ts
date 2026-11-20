@@ -342,6 +342,35 @@ export async function routeTo(from: LatLng, to: LatLng): Promise<RoadRoute | nul
 }
 
 /**
+ * Road distance between two points for **billing**, in metres.
+ *
+ * Separate from `routeTo` on purpose, for two reasons.
+ *
+ * It avoids tolls. Innovo does not pay them, so the kilometres a customer is
+ * charged for have to be the kilometres of a toll-free road — note that this
+ * deliberately diverges from what dispatch routes a driver along, which still
+ * takes the fastest road whatever it costs.
+ *
+ * And it asks for nothing but the distance. Google bills per field, and a
+ * billing run prices a hundred jobs at once; a polyline nobody draws would be
+ * paid for a hundred times over.
+ *
+ * Cached on the geometry TTL: two fixed addresses do not move.
+ */
+export async function billableDistanceM(from: LatLng, to: LatLng): Promise<number | null> {
+  return cached(`bill:${key(from)}:${key(to)}`, env.GOOGLE_ROUTES_CACHE_TTL_MS, async () => {
+    const body = await post(
+      ROUTES_URL,
+      'routes.distanceMeters',
+      routeBody(from, to, [], { routeModifiers: { avoidTolls: true } }),
+    );
+    const route = firstRoute(body);
+    const m = route?.distanceMeters;
+    return typeof m === 'number' && Number.isFinite(m) ? m : null;
+  });
+}
+
+/**
  * Drive time and road distance from many origins to ONE destination, in a single
  * request.
  *

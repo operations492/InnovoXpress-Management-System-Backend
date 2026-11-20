@@ -119,7 +119,8 @@ function toPinDto(row: repo.PinRow, totalQty: number) {
     senderLng: row.senderLng,
     receiverLat: row.receiverLat,
     receiverLng: row.receiverLng,
-    clientName: row.client.name,
+    // Walk-in orders show the typed customer rather than the account name.
+    clientName: row.customerName ?? row.client.name,
     senderName: row.senderName,
     senderLine1: row.senderLine1,
     senderProvince: row.senderProvince,

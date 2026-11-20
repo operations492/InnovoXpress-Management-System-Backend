@@ -15,6 +15,30 @@ export const COMPANY = {
   site: 'www.innovoxpress.com',
 };
 
+/**
+ * The parts of the company block that only an invoice prints.
+ *
+ * Kept here beside COMPANY rather than in the invoice renderer, because the
+ * console's browser receipt (features/finance/rateCardReceipt.ts) prints the
+ * same strings. Two copies of a bank account number is exactly the kind of
+ * drift that gets a payment sent to the wrong place.
+ */
+export const BILLING = {
+  taxNumber: '719574089RT0001',
+  paymentTerms: '15 Days',
+  bank: [
+    'Account Holder: 11163779 CANADA INC',
+    'Financial Institution: BANK OF MONTREAL',
+    'Transit Number: 38582',
+    'Institution Number: 001',
+    'Account No:1947131',
+  ],
+  etransfer: 'payments@innovoxpress.com',
+  billingEmail: 'billing@innovoxpress.com',
+  thanks:
+    "Thank you for your business! If you have any questions regarding your invoice, please don't hesitate to reach out to us.",
+};
+
 export const NAVY = '#1A1A6E';
 export const ORANGE = '#F5A623';
 export const INK = '#111111';

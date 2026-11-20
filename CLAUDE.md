@@ -53,11 +53,11 @@ Everything below is real and shipped. Nothing here is a plan.
 | Chat | Direct messages and spaces, attachments, keyset paging, read markers, per-user Realtime inbox, rate limit |
 | Users | Admin-only accounts on Supabase Auth; driver accounts linked to roster rows |
 | Service levels | Admin-managed list ("5 Ton Truck", "Expedite" …) referenced by orders |
-| Clients | Admin-managed list; a default pickup address that prefills an order’s sender |
+| Clients | Admin-managed list with a stored address (the console no longer prefills an order’s sender from it) |
 | Reference | One call that fills every console dropdown |
 
 Not built, on purpose: no `CANCELLED` or `FAILED` status, no order delete, no money or pricing columns,
-no server-side geocoding, no push notifications. The frontend's finance pages run on in-memory fixtures.
+no server-side geocoding, no push notifications. The frontend's finance pages are on the real API.
 
 Printing grew out of a spike and is now real: `src/modules/documents/` serves
 `GET /api/consignments/:id/label.pdf` and `.../docket.pdf` with `pdfkit` and `bwip-js`. The original
@@ -310,8 +310,9 @@ logged.
 - Sign-in is real: `AuthProvider` renders the login screen instead of its children when there is no
   session. `api.ts` only verifies; a 401 triggers one `refreshSession()` then signs out.
 - Address entry is a modal picker on **TomTom Search** with a draggable pin; both ends must be pinned.
-- Consignment items are real and match the API exactly. Fields with no backend column (COD, delivery
-  fee, crew, handling, additional services, suite/floor) stay on screen and do not persist.
+- Consignment items are real and match the API exactly. The console no longer shows fields or controls
+  with no backend (COD, fee, team, building, bulk edit, order delete, toast-only buttons were removed);
+  additional services on an order are real and persist to `consignment_services`.
 - Service Levels is the one finance-area page on the real API (`/api/service-levels`).
 - The dispatch map derives everything from one `/api/map/pins` payload; view rules live in
   `features/map/state/mapView.ts` with no React import.

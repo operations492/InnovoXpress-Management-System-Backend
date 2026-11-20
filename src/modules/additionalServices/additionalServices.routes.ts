@@ -4,9 +4,9 @@ import { requireMinRole } from '../../middleware/rbac.js';
 import { validate } from '../../middleware/validate.js';
 import {
   catalogIdParamSchema,
-  createCatalogEntrySchema,
+  createAdditionalServiceSchema,
   listCatalogQuerySchema,
-  updateCatalogEntrySchema,
+  updateAdditionalServiceSchema,
 } from '../../schemas/catalog.schema.js';
 import * as controller from './additionalServices.controller.js';
 
@@ -19,12 +19,12 @@ router.use(authenticate);
 router.get('/', requireMinRole('operator'), validate(listCatalogQuerySchema, 'query'), controller.list);
 router.get('/:id', requireMinRole('operator'), validate(catalogIdParamSchema, 'params'), controller.get);
 
-router.post('/', requireMinRole('admin'), validate(createCatalogEntrySchema), controller.create);
+router.post('/', requireMinRole('admin'), validate(createAdditionalServiceSchema), controller.create);
 router.patch(
   '/:id',
   requireMinRole('admin'),
   validate(catalogIdParamSchema, 'params'),
-  validate(updateCatalogEntrySchema),
+  validate(updateAdditionalServiceSchema),
   controller.update,
 );
 router.delete('/:id', requireMinRole('admin'), validate(catalogIdParamSchema, 'params'), controller.remove);

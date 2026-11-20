@@ -133,6 +133,24 @@ const envSchema = z.object({
    * does not write its own GPS jitter into the record forever.
    */
   HISTORY_MIN_MOVE_M: z.coerce.number().positive().default(15),
+
+  /*
+   * Outgoing mail, for sending invoices. All optional so the API still starts
+   * without them; sending then answers 503 "email is not configured" instead of
+   * the whole server refusing to boot. Server-side only — never a VITE_ var.
+   *
+   * Gmail / Google Workspace: SMTP_HOST=smtp.gmail.com, SMTP_PORT=587, the
+   * mailbox as SMTP_USER and a Google App Password (not the account password)
+   * as SMTP_PASS. SMTP_FROM may be another address only if Gmail has it as a
+   * "Send mail as" alias; otherwise Gmail rewrites it to SMTP_USER.
+   */
+  SMTP_HOST: z.string().default(''),
+  /** 587 = STARTTLS (upgrades to TLS after connecting); 465 = TLS from the start. */
+  SMTP_PORT: z.coerce.number().int().positive().default(587),
+  SMTP_USER: z.string().default(''),
+  SMTP_PASS: z.string().default(''),
+  /** The From line, e.g. "Innovo Xpress <noreply@innovoxpress.com>". Defaults to SMTP_USER. */
+  SMTP_FROM: z.string().default(''),
 });
 
 const parsed = envSchema.safeParse(process.env);

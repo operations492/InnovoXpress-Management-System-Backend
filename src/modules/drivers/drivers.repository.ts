@@ -88,6 +88,7 @@ export function findConsignmentsForDriver(
       priority: true,
       taskType: true,
       client: { select: { name: true } },
+      customerName: true,
       senderName: true,
       senderPhone: true,
       senderLine1: true,
@@ -102,7 +103,8 @@ export function findConsignmentsForDriver(
       receiverNotes: true,
       pickupAfter: true,
       deliverBefore: true,
-      generalNote: true,
+      // No `generalNote`: it is the operators' internal note. Pickup and drop
+      // notes above are the driver-facing ones, and are deliberately included.
       documents: { select: { kind: true } },
       /// Lets the driver app order its list by most recently touched. Moves on
       /// every write — assignment, each status step, proof capture — so it is

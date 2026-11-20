@@ -11,6 +11,9 @@
  */
 import { prisma } from '../src/config/prisma.js';
 
+/** The system-added charge. Its name is fixed so the seed can find it again. */
+const AFTER_HOURS = 'After Hour Charge';
+
 /** Accessorials a Canadian courier actually bills for. */
 const ADDITIONAL_SERVICES = [
   'Lift Gate',
@@ -47,7 +50,20 @@ async function seed() {
       update: { sortOrder: i },
     });
   }
-  console.log(`✓ additional services: ${ADDITIONAL_SERVICES.length}`);
+  // The one charge the system applies on its own. It is seeded rather than left
+  // to be typed in, because the quote finds it by trigger and expects it to exist.
+  await prisma.additionalService.upsert({
+    where: { name: AFTER_HOURS },
+    create: {
+      name: AFTER_HOURS,
+      sortOrder: ADDITIONAL_SERVICES.length,
+      active: true,
+      trigger: 'AFTER_HOURS',
+    },
+    update: { trigger: 'AFTER_HOURS' },
+  });
+
+  console.log(`✓ additional services: ${ADDITIONAL_SERVICES.length + 1}`);
 
   for (const [i, name] of FREIGHT_ITEMS.entries()) {
     await prisma.freightItem.upsert({
@@ -60,21 +76,16 @@ async function seed() {
 }
 
 async function clean() {
-  // A priced entry is left alone: the FK is Restrict, and removing it would take
-  // a rate plan's price with it.
-  const [pricedServices, pricedItems] = await Promise.all([
-    prisma.ratePlanItem.findMany({
-      where: { additionalServiceId: { not: null } },
-      select: { additionalServiceId: true },
-    }),
-    prisma.ratePlanItem.findMany({
-      where: { freightItemId: { not: null } },
-      select: { freightItemId: true },
-    }),
-  ]);
+  // A freight item named on a route rate is left alone: the FK is Restrict, and
+  // removing it would take a rate card's price with it. Additional services are
+  // priced by nothing since rate cards replaced rate plans, so none are held.
+  const pricedItems = await prisma.routeRate.findMany({
+    select: { freightItemId: true },
+    distinct: ['freightItemId'],
+  });
 
-  const keepServices = new Set(pricedServices.map((r) => r.additionalServiceId as string));
-  const keepItems = new Set(pricedItems.map((r) => r.freightItemId as string));
+  const keepServices = new Set<string>();
+  const keepItems = new Set(pricedItems.map((r) => r.freightItemId));
 
   const services = await prisma.additionalService.findMany({
     where: { name: { in: ADDITIONAL_SERVICES } },
@@ -89,10 +100,10 @@ async function clean() {
   const removableItems = items.filter((f) => !keepItems.has(f.id));
 
   for (const s of services.filter((s) => keepServices.has(s.id))) {
-    console.log(`- kept ${s.name}: priced by a rate plan`);
+    console.log(`- kept ${s.name}: priced by a rate card`);
   }
   for (const f of items.filter((f) => keepItems.has(f.id))) {
-    console.log(`- kept ${f.name}: priced by a rate plan`);
+    console.log(`- kept ${f.name}: priced by a rate card`);
   }
 
   const a = await prisma.additionalService.deleteMany({

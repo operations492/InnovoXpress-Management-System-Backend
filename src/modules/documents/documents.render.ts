@@ -52,7 +52,7 @@ const COPY_H = 412;
  * pdfkit carries that into later calls, which silently widened every string until
  * words fell off the edge of the label.
  */
-function flow(
+export function flow(
   doc: PDFKit.PDFDocument,
   text: string,
   x: number,
@@ -69,7 +69,7 @@ function flow(
 }
 
 /** One cell of a table row: never wraps, never pushes the row height. */
-function cell(
+export function cell(
   doc: PDFKit.PDFDocument,
   text: string,
   x: number,
@@ -82,7 +82,7 @@ function cell(
   doc.text(text, x, y, { width, align, characterSpacing: 0, lineBreak: false, ellipsis: true });
 }
 
-function rule(doc: PDFKit.PDFDocument, x1: number, y: number, x2: number, w = 0.8, dashed = false) {
+export function rule(doc: PDFKit.PDFDocument, x1: number, y: number, x2: number, w = 0.8, dashed = false) {
   doc.moveTo(x1, y).lineTo(x2, y).lineWidth(w).strokeColor(RULE);
   if (dashed) doc.dash(2, { space: 2 }).stroke().undash();
   else doc.stroke();
@@ -503,7 +503,8 @@ function drawPodStop(
   podPair(doc, 'Consignment Date:', fmtDate(o.createdAt), POD_RLX, POD_RVX, oy + 17, 150);
 
   podPair(doc, 'To:', o.receiverName.toUpperCase(), POD_LX, POD_VX, oy + 34, 170);
-  podPair(doc, 'Customer:', o.client.name, POD_RLX, POD_RVX, oy + 34, 150);
+  // A Walk-in order prints the name the operator typed, not "Walk-in".
+  podPair(doc, 'Customer:', o.customerName ?? o.client.name, POD_RLX, POD_RVX, oy + 34, 150);
 
   // The reference leaves a wider gap here, separating who the job is for from
   // who actually did it. Kept, because it is the one break in a dense page.
@@ -519,7 +520,8 @@ function drawPodStop(
   );
 
   podPair(doc, 'Completion Time:', fmtDateTime(s.completedAt), POD_LX, POD_VX, oy + 78, 170);
-  podPair(doc, 'Consignment Note:', o.generalNote ?? '', POD_RLX, POD_RVX, oy + 78, 150);
+  // No "Consignment Note" opposite: `generalNote` is the operators' internal
+  // note, and this report goes to the customer. The slot is left empty.
 
   podPair(doc, 'Received By:', s.signedByName ?? '', POD_LX, POD_VX, oy + 95, 170);
   /*

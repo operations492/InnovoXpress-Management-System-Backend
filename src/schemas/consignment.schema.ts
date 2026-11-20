@@ -77,10 +77,30 @@ export const itemSchema = z
 
 export const createConsignmentSchema = z
   .object({
-    clientId: z.string().min(1, 'Client is required'),
+    /**
+     * Optional. With no client the order goes to the built-in Walk-in account,
+     * and `customerName` carries whoever the operator typed instead.
+     */
+    clientId: z.string().min(1).optional(),
+    /** Free-text customer for an order with no picked client. Null = none. */
+    customerName: z.string().trim().max(120).nullable().optional(),
     clientReference: trimmed(64).optional(),
     /** A row in service_levels. Validated to exist and be active. */
     serviceLevelId: z.string().min(1).optional(),
+    /**
+     * What is being carried, for pricing. Optional because matching is loose
+     * and plenty of orders are logged before anyone classifies the freight.
+     */
+    freightItemId: z.string().min(1).optional(),
+    /**
+     * Accessorials this job needed — ids only, never amounts. The price is
+     * whatever the customer's rate card says when the job is invoiced, so a
+     * renegotiated rate is picked up without rewriting any order.
+     *
+     * The whole set travels together: the form shows a tick-list and saves it
+     * whole, so an absent array means "none", not "leave it alone".
+     */
+    additionalServiceIds: z.array(z.string().min(1)).max(50).optional(),
 
     taskType: z.enum(TaskType).default(TaskType.DELIVERY),
     priority: z.enum(Priority).default(Priority.NORMAL),
@@ -124,9 +144,19 @@ export const updateConsignmentSchema = z
   .object({
     /** Optional: move the order to another client. Validated against the clients table. */
     clientId: z.string().min(1).optional(),
+    /**
+     * Sending this WITHOUT a clientId moves the order to Walk-in under that
+     * name (null or blank = Walk-in with no name). Picking a named client
+     * clears it.
+     */
+    customerName: z.string().trim().max(120).nullable().optional(),
     clientReference: trimmed(64).nullable().optional(),
     /** Optional; null clears it. */
     serviceLevelId: z.string().min(1).nullable().optional(),
+    /** Null clears it; absent leaves it alone. */
+    freightItemId: z.string().min(1).nullable().optional(),
+    /** Replaces the whole set. An empty array removes every charge. */
+    additionalServiceIds: z.array(z.string().min(1)).max(50).optional(),
     taskType: z.enum(TaskType).optional(),
     priority: z.enum(Priority).optional(),
     sender: senderSchema.optional(),
