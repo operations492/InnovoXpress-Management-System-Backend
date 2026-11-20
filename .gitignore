@@ -70,3 +70,4 @@ scratch/
 # prisma/migrations/  — migration history is source of truth, always commit it
 # prisma/sql/         — CHECK constraints, RLS lockdown and the retention job
 # .env.example        — the template, with placeholder values only
+lfsa000b21a_e/
