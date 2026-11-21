@@ -1,0 +1,88 @@
+# Render blueprint for the Innovo Xpress API.
+#
+# Deploy from this file (Render dashboard -> Blueprints) rather than configuring
+# the service by hand, so the build command below is never lost.
+
+services:
+  - type: web
+    name: innovoxpress-api
+    runtime: node
+
+    # 2 GB / 1 CPU. NOT starter: every upload route uses multer.memoryStorage(),
+    # so POD photos (up to 10 MB each) and generated invoice PDFs are buffered
+    # in RAM. Starter's 512 MB leaves no margin for concurrent uploads.
+    plan: standard
+
+    # DELIBERATE, AND NOT CHANGEABLE LATER — a Render service cannot move region
+    # after it is created.
+    #
+    # Ohio is chosen for proximity to ca-central-1 (Toronto), which is where the
+    # Supabase project should live: the drivers are in Canada. The project is
+    # currently in ap-south-1 (Mumbai), so until it is moved every query crosses
+    # to India and back (~220 ms), and each location ping makes three sequential
+    # round trips.
+    #
+    # If the database is staying in Mumbai, change this to `singapore` BEFORE
+    # creating the service.
+    region: ohio
+
+    # `npm ci --include=dev` is load-bearing. typescript, prisma and tsx are all
+    # devDependencies, and npm omits devDependencies when NODE_ENV=production —
+    # which is set below. Without the flag, `tsc` is missing and the build fails.
+    #
+    # `prisma generate` is explicit rather than left to the postinstall hook:
+    # npm now gates install scripts behind an allowlist, and a skipped hook would
+    # produce a stale Prisma client and a build full of phantom type errors.
+    buildCommand: npm ci --include=dev && npx prisma generate && npm run build
+
+    startCommand: npm start
+
+    # Hits the database with SELECT 1, so a failing check means a genuinely
+    # unusable API rather than just a live process.
+    healthCheckPath: /health
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # Render injects PORT; src/config/env.ts coerces it. Do not set it here.
+
+      # --- secrets: entered in the dashboard, never committed -----------------
+      # Supabase session-mode pooler, port 5432.
+      - key: DATABASE_URL
+        sync: false
+      # Migrations and `db push` need a direct/session connection — a
+      # transaction pooler breaks Prisma's session-scoped advisory lock.
+      - key: DIRECT_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      # Bypasses every Supabase security rule. Server-side only.
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
+      # Comma-separated. MUST be set: the default is http://localhost:5173, which
+      # blocks the dispatcher console in production.
+      - key: CORS_ORIGINS
+        sync: false
+
+      # Defaults to ChangeMe!123 in src/config/env.ts. Set it, or never seed here.
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
+
+      # --- optional ----------------------------------------------------------
+      # Invoice email. Unset is safe: mailConfigured() guards every send and the
+      # transport is built lazily, so the server boots without these.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+
+      # Route optimisation and traffic-aware ETAs. Unset is safe: routing throws
+      # RoutingUnavailableError and the rest of the API is unaffected.
+      - key: GOOGLE_ROUTES_API_KEY
+        sync: false

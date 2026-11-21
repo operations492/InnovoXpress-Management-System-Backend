@@ -1,0 +1,21 @@
+{
+  // Production build only.
+  //
+  // `tsconfig.json` deliberately covers src/, prisma/ and tests/ so the editor
+  // type-checks the whole repo. That is wrong for a build: with `rootDir: "."`
+  // tsc mirrors every included folder under dist/, so `src/server.ts` lands at
+  // `dist/src/server.js` while `npm start` looks for `dist/server.js` — the
+  // server never boots.
+  //
+  // Narrowing rootDir to src/ puts the entry point exactly where `start`
+  // expects it, and leaves the test suite and the seed scripts out of the
+  // deployed bundle. The seeds stay source-only on purpose: they run through
+  // tsx, never from dist/.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "tests", "prisma"]
+}
