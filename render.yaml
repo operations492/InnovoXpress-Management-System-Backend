@@ -34,9 +34,14 @@ services:
     # `@types/*` package is plain `dev` and vanishes. `tsc` then runs fine and
     # reports ~60 missing-declaration errors that read like broken source.
     #
-    # `prisma generate` is explicit rather than left to the postinstall hook:
-    # npm now gates install scripts behind an allowlist, and a skipped hook would
-    # produce a stale Prisma client and a build full of phantom type errors.
+    # `prisma generate` is belt-and-braces, NOT a fix for anything observed.
+    # The `postinstall` hook already does it, and it works even when
+    # devDependencies are dropped, because the `prisma` CLI is a second optional
+    # peer of @prisma/client and so is kept as `devOptional` too. Stating it here
+    # only guards the case where install scripts are skipped (--ignore-scripts,
+    # or npm tightening its script gating), which would otherwise surface as a
+    # stale Prisma client and another round of type errors that read like broken
+    # source. Costs ~10s. Safe to drop if the build command is set by hand.
     buildCommand: npm ci --include=dev && npx prisma generate && npm run build
 
     startCommand: npm start
