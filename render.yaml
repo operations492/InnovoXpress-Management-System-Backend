@@ -26,9 +26,13 @@ services:
     # creating the service.
     region: ohio
 
-    # `npm ci --include=dev` is load-bearing. typescript, prisma and tsx are all
-    # devDependencies, and npm omits devDependencies when NODE_ENV=production —
-    # which is set below. Without the flag, `tsc` is missing and the build fails.
+    # `npm ci --include=dev` is load-bearing, and `.npmrc` repeats it so the
+    # build survives this blueprint being bypassed. npm derives `omit=dev` from
+    # NODE_ENV=production (set below), and the resulting failure is misleading:
+    # `typescript` still installs, because @prisma/client lists it as an optional
+    # PEER dependency, so npm marks it `devOptional` and keeps it. Every
+    # `@types/*` package is plain `dev` and vanishes. `tsc` then runs fine and
+    # reports ~60 missing-declaration errors that read like broken source.
     #
     # `prisma generate` is explicit rather than left to the postinstall hook:
     # npm now gates install scripts behind an allowlist, and a skipped hook would
